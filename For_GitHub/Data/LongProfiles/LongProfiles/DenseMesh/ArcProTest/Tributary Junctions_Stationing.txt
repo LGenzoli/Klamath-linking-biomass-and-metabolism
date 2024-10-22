@@ -1,0 +1,10 @@
+Name, Station, Elevationn
+Trinity River, 43.11881715430369, -1.0
+Shasta River, 179.02191505100973, -1.0
+Scott River, 144.63632820329545, -1.0
+Salmon River, 66.11834159931388, -1.0
+Indian Creek, 107.85102391017462, -1.0
+Cottonwood Creek, 184.62338010299302, -1.0
+Beaver Creek, 162.93472306150727, -1.0
+Clear Creek, 99.58324440998788, -1.0
+Blue Creek, 16.221657060333925, -1.0

@@ -1,0 +1,945 @@
+---
+title: "Pub_Figures for 2019 Metabolism-Assemblage Manuscript_2024_Revision"
+author: "Laurel Genzoli"
+date: "2023-10-19"
+
+    
+output:
+   html_document:
+    theme: united
+    highlight: tango
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{=html}
+<style type="text/css">
+body, td {font-size: 12px;}
+code.r{font-size: 8px;}
+pre {font-size: 10px}
+</style>
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = F, message = F)
+knitr::opts_knit$set(root.dir = '/Users/laurelgenzoli/Dropbox/2018-2022_PHD/2019_Klamath/For_GitHub')
+def.chunk.hook  <- knitr::knit_hooks$get("chunk")
+knitr::knit_hooks$set(chunk = function(x, options) {
+  x <- def.chunk.hook(x, options)
+  ifelse(options$size != "normalsize", paste0("\n \\", options$size,"\n\n", x, "\n\n \\normalsize"), x)
+})
+
+```
+
+
+## The first round of plots are the primary figures. 
+All of these plot except for the cor plot have some post processing in InkScape.
+
+### Packages and Data
+There are 4 data files for my publication figures: 2 are written by the HGAM_Stats file
+  - metab_hgam: This is the output file made in the "Metab_Out.Rmd". All sites are bound together and metabolism metrics are scaled to depth. 
+  - metab_sum: Summary stats from the summer time series based on both HGAMS and raw metab (RBI and CV)
+  -daily_predictions: This is the savoy data to compare Klamath to other rivers
+  -bm_final_out: Biomass data!
+
+
+```{r, echo = F, message = F}
+setwd('/Users/laurelgenzoli/Dropbox/2018-2022_PHD/2019_Klamath/For_GitHub')
+
+library(tidyverse)
+library(lubridate)
+library(viridis)
+library(cowplot)
+library(ggpubr)
+library(ggnewscale)
+
+
+site <- c("I5", "TH", "WB", "BB", "RP", "SV", "HC", "OMR", "OR", "WE", "KAT")
+site.no <- rep(1:11, 1)
+site.nos <- data.frame(site, site.no)
+
+met.final <- read_csv("Data/final_data/metab_hgam.csv")%>%
+  select(-site.no) %>%
+  left_join(site.nos, by = "site")
+
+sites <- c("I5", "TH", "WB", "BB", "RP", "SV", "HC", "OMR", "OR", "WE", "KAT")
+met.final$site <- factor(met.final$site, levels = sites)
+
+bm <- read_csv("Data/final_data/bm_final_out.csv")%>%
+select(site_number, spec_type, river_mile, Biomass.mean)%>%
+rename(site.no = site_number)%>%
+left_join(site.nos, by = "site.no")%>%
+filter(spec_type %in% c("algae", "macrophyte"))%>%
+pivot_wider(names_from= spec_type, values_from = Biomass.mean)
+
+biomass <- read_csv("Data/final_data/bm_final_out.csv")%>%
+select(site_number, spec_type, river_mile, Biomass.mean)%>%
+rename(site.no = site_number)%>%
+left_join(site.nos, by = "site.no")%>%
+pivot_wider(names_from= spec_type, values_from = Biomass.mean)
+
+cover <- read_csv("Data/final_data/bm_final_out.csv")%>%
+select(site_number, spec_type, river_mile, Cover.mean)%>%
+rename(site.no = site_number)%>%
+left_join(site.nos, by = "site.no")%>%
+pivot_wider(names_from= spec_type, values_from = Cover.mean)
+
+met.stats <- read_csv("Data/final_data/metab_sum.csv")%>%
+  #left_join(site.nos, by = "site")%>%
+  left_join(bm, by = "site")
+
+
+```
+
+ 
+### FIGURE 3: UPdated COR PLOTS, colored and combined
+These are plots I added while writing to look at total autotorphic biomass with GPP, ER and NEP to see if a "null hypothesis" of total veg biomass was better than our leading hypothesis that Macrophytes matter.
+```{r, warning = F, echo = F,  fig.width = 6.2, fig.height = 3.2, fig.align = "center"}
+cov <- cover %>% 
+  pivot_longer(4:6, names_to = "spec_type", values_to = "Cover.Percent")
+
+biom <- biomass %>% 
+  pivot_longer(4:6, names_to = "spec_type", values_to = "Mean.Biomass")%>%
+  left_join(cov, by = c("site.no", "river_mile", "site", "spec_type"))%>%
+  mutate(river.km = river_mile*1.60934)
+
+biom$spec_type = factor(biom$spec_type, levels = c("biofilm",  "algae", "macrophyte"))
+levels(biom$metric)
+
+mean.g <- met.stats%>%filter(stat == "mean.gpp")
+mean.r <- met.stats%>%filter(stat == "mean.er")
+mean.n <- met.stats%>%filter(stat == "mean.nep")
+
+######################
+## For total biomass: 
+######################
+
+
+gpXbm <- biom%>% group_by(site.no)%>%
+  summarize(biomass = sum(Mean.Biomass))%>%
+  left_join(mean.g, by = "site.no")%>%
+  ggplot(aes(x = biomass, y = value, col = as.factor(site.no)))+
+  geom_point(size = 3, alpha = 0.8, shape = 17)+
+  theme_classic()+
+  theme(legend.position = "null", 
+        axis.text.y = element_text(margin = margin(r = 1)),
+        axis.title.y = element_text(margin = margin(r = -1)),
+        plot.margin = unit(c(0.1, 0.1, 0.1, 0.2), "cm"),
+        axis.title.x = element_blank(),
+        axis.text.x = element_blank())+
+  ylab(expression(paste("Mean GPP ", "(g O"[2], " m"^{-2}, " d"^{-1},")" )))+
+  scale_colour_viridis_d(begin = 0, end = 0.8, direction  = 1)+
+  scale_x_continuous(limits = c(0, 68), expand = c(0.04,0))+
+  scale_y_continuous(limits = c(0, 17), expand = c(0.04,0))+
+   stat_cor(aes(x = biomass, y = value, label = after_stat(r.label)), 
+           method = "pearson", 
+           inherit.aes = FALSE,
+           r.accuracy = 0.01,
+           label.y.npc=0.05, label.x.npc = 0,
+           cor.coef.name = "r",
+           size = 3.8,
+           fontface = "bold")
+
+
+
+
+erXbm <- biom%>% group_by(site.no)%>%
+  summarize(biomass = sum(Mean.Biomass))%>%
+  left_join(mean.r, by = "site.no")%>%
+  ggplot(aes(x = biomass, y = value, col = as.factor(site.no)))+
+  geom_point(size = 3, alpha = 0.8, shape = 17)+
+  theme_classic()+
+  theme(legend.position = "null",
+        axis.text.y = element_text(margin = margin(r = 1)),
+        axis.title.y = element_text(margin = margin(r = -1)),
+        axis.title.x = element_blank(),
+        axis.text.x = element_blank(),
+        plot.margin = unit(c(0.1, 0.1, 0.1, 0.2), "cm"))+
+  ylab(expression(paste("Mean ER ", "(g O"[2], " m"^{-2}, " d"^{-1},")" )))+
+  scale_colour_viridis_d(begin = 0, end = 0.8, direction  = 1)+
+  scale_x_continuous(limits = c(0, 68), expand = c(0.04,0))+
+  scale_y_continuous(limits = c(-17, 0), expand = c(0.04,0))+
+   stat_cor(aes(x = biomass, y = value, label = after_stat(r.label)), 
+           method = "pearson", 
+           inherit.aes = FALSE,
+           r.accuracy = 0.01,
+           label.y.npc=0.05, label.x.npc = 0,
+           cor.coef.name = "r",
+           size = 3.8,
+           fontface = "bold")
+
+
+npXbm <- biom%>% group_by(site.no)%>%
+  summarize(biomass = sum(Mean.Biomass))%>%
+  left_join(mean.n, by = "site.no")%>%
+  ggplot(aes(x = biomass, y = value, col = as.factor(site.no)))+
+  geom_point(size = 3, alpha = 0.8, shape = 17)+
+  theme_classic()+
+  theme(legend.position = "null",
+        axis.text.y = element_text(margin = margin(r = 1)),
+        axis.title.y = element_text(margin = margin(r = -1)),
+        axis.title.x = element_blank(),
+        plot.margin = unit(c(0.1, 0.1, 0.1, 0.2), "cm"))+
+  ylab(expression(paste("Mean NEP ", "(g O"[2], " m"^{-2}, " d"^{-1},")" )))+
+  scale_colour_viridis_d(begin = 0, end = 0.8, direction  = 1)+
+  scale_x_continuous(limits = c(0, 68), expand = c(0.04,0))+
+  scale_y_continuous(limits = c(-4, 6), expand = c(0.04,0))+
+   stat_cor(aes(x = biomass, y = value, label = after_stat(r.label)), 
+           method = "pearson", 
+           inherit.aes = FALSE,
+           r.accuracy = 0.01,
+           label.y.npc=0.05, label.x.npc = 0,
+           cor.coef.name = "r",
+           size = 3.8,
+           fontface = "bold")
+
+
+title.TB <- ggdraw() + 
+  draw_label(expression(paste("Total autotrophic biomass (g AFDM/", m^2, ")")), size = 13.5, 
+             hjust = 0.4, vjust = -0.0)
+
+
+plots <- plot_grid(gpXbm, erXbm, npXbm,
+                   ncol = 3, align = "vh", byrow = T,
+                   labels = c("(a)", "(b)","(c)"),
+                   label_size = 10.5,
+                   label_x = 0.23, label_y = 1.01)
+
+TABM <- plot_grid(plots, title.TB, ncol = 1, rel_heights = c(1, 0.25))
+
+
+
+######################
+## And for just macrophyte:
+######################
+
+### GPP, ER, NEP
+gpXmb <- biom%>% filter(spec_type == "macrophyte") %>%
+  select(site.no, Mean.Biomass) %>%
+  left_join(mean.g, by = "site.no")%>%
+  ggplot(aes(x = Mean.Biomass, y = value, col = as.factor(site.no)))+
+  geom_point(size = 3, alpha = 0.8)+
+  theme_classic()+
+  theme(legend.position = "null", 
+        axis.text.y = element_text(margin = margin(r = 1)),
+        axis.title.y = element_text(margin = margin(r = -1.5)),
+        plot.margin = unit(c(0.1, 0.1, 0.1, 0.2), "cm"),
+        axis.title.x = element_blank(),
+        axis.text.x = element_blank())+
+  ylab(expression(paste("Mean GPP ", "(g O"[2], " m"^{-2}, " d"^{-1},")" )))+
+  scale_colour_viridis_d(begin = 0, end = 0.8, direction  = 1)+
+  scale_x_continuous(limits = c(0, 68), expand = c(0.04,0))+
+  scale_y_continuous(limits = c(0, 17), expand = c(0.04,0))+
+   stat_cor(aes(x = macrophyte, y = value, label = after_stat(r.label)), 
+           method = "pearson", 
+           inherit.aes = FALSE,
+           r.accuracy = 0.01,
+           label.y.npc=0.05, label.x.npc = 0,
+           cor.coef.name = "r",
+           size = 3.8,
+           fontface = "bold")
+
+
+erXmb <- biom%>% filter(spec_type == "macrophyte") %>%
+  select(site.no, Mean.Biomass) %>%
+  left_join(mean.r, by = "site.no")%>%
+  ggplot(aes(x = Mean.Biomass, y = value, col = as.factor(site.no)))+
+  geom_point(size = 3, alpha = 0.8)+
+  theme_classic()+
+  theme(legend.position = "null",
+        axis.text.y = element_text(margin = margin(r = 1)),
+        axis.title.y = element_text(margin = margin(r = -1.5)),
+        plot.margin = unit(c(0.1, 0.1, 0.1, 0.2), "cm"),
+        axis.title.x = element_blank(),
+        axis.text.x = element_blank())+
+  ylab(expression(paste("Mean ER ", "(g O"[2], " m"^{-2}, " d"^{-1},")" )))+
+  scale_colour_viridis_d(begin = 0, end = 0.8, direction  = 1)+
+  scale_x_continuous(limits = c(0, 68), expand = c(0.04,0))+
+  scale_y_continuous(limits = c(-17, 0), expand = c(0.04,0))+
+   stat_cor(aes(x = macrophyte, y = value, label = after_stat(r.label)), 
+           method = "pearson", 
+           inherit.aes = FALSE,
+           r.accuracy = 0.01,
+           label.y.npc=0.05, label.x.npc = 0,
+           cor.coef.name = "r",
+           size = 3.8,
+           fontface = "bold")
+
+
+npXmb <- biom%>% filter(spec_type == "macrophyte") %>%
+  select(site.no, Mean.Biomass) %>%
+  left_join(mean.n, by = "site.no")%>%
+  ggplot(aes(x = Mean.Biomass, y = value, col = as.factor(site.no)))+
+  geom_point(size = 3, alpha = 0.8)+
+  theme_classic()+
+  theme(legend.position = "null",
+        axis.text.y = element_text(margin = margin(r = 1)),
+        axis.title.y = element_text(margin = margin(r = -1.5)),
+        plot.margin = unit(c(0.1, 0.1, 0.1, 0.2), "cm"),
+        axis.title.x = element_blank())+
+  ylab(expression(paste("Mean NEP ", "(g O"[2], " m"^{-2}, " d"^{-1},")" )))+
+  scale_colour_viridis_d(begin = 0, end = 0.8, direction  = 1)+
+  scale_x_continuous(limits = c(0, 68), expand = c(0.04,0))+
+  scale_y_continuous(limits = c(-4, 6), expand = c(0.04,0))+
+   stat_cor(aes(x = macrophyte, y = value, label = after_stat(r.label)), 
+           method = "pearson", 
+           inherit.aes = FALSE,
+           r.accuracy = 0.01,
+           label.y.npc=0.05, label.x.npc = 0,
+           cor.coef.name = "r",
+           size = 3.8,
+           fontface = "bold")
+
+
+
+######################
+## And for just macrophyte for other stats:
+######################
+
+## max.gpp
+maxg <- met.stats %>% filter(stat == "max.gpp")%>%
+  ggplot(aes(x = macrophyte, y = value, col = as.factor(site.no)))+
+  geom_point(size = 3, alpha = 0.8)+
+  theme_classic()+
+  theme(legend.position = "null",
+        axis.text.y = element_text(margin = margin(r = 1)),
+        axis.title.y = element_text(margin = margin(r = -1.5)),
+        plot.margin = unit(c(0.1, 0.1, 0.1, 0.2), "cm"),
+        axis.title.x = element_blank(),
+        axis.text.x = element_blank())+
+  ylab(expression(paste("Peak GPP ", "(g O"[2], " m"^{-2}, " d"^{-1},")" )))+
+  scale_colour_viridis_d(begin = 0, end = 0.8, direction  = 1)+
+  scale_x_continuous(limits = c(0, 68), expand = c(0.04,0))+
+  scale_y_continuous(limits = c(0,21), expand = c(0.04,0))+
+   stat_cor(aes(x = macrophyte, y = value, label = after_stat(r.label)), 
+           method = "pearson", 
+           inherit.aes = FALSE,
+           r.accuracy = 0.01,
+           label.y.npc=0.05, label.x.npc = 0,
+           cor.coef.name = "r",
+           size = 3.8,
+           fontface = "bold")
+
+
+#max.gpp.day
+maxgday <- met.stats %>% filter(stat == "max.gpp.day")%>%
+  ggplot(aes(x = macrophyte, y = value, col = as.factor(site.no)))+
+  geom_point(size = 3, alpha = 0.8)+
+  theme_classic()+
+  theme(legend.position = "null",
+        axis.text.y = element_text(margin = margin(r = 1)),
+        axis.title.y = element_text(margin = margin(r = -1.5)),
+        plot.margin = unit(c(0.1, 0.1, 0.1, 0.2), "cm"),
+        axis.title.x = element_blank(),
+  axis.text.x = element_blank())+
+  ylab(expression(paste("Peak GPP time (JD)" )))+
+  scale_colour_viridis_d(begin = 0, end = 0.8, direction  = 1)+
+  scale_x_continuous(limits = c(0, 68), expand = c(0.04,0))+
+  scale_y_continuous(limits = c(180, 276), expand = c(0.04,0))+
+   stat_cor(aes(x = macrophyte, y = value, label = after_stat(r.label)), 
+           method = "pearson", 
+           inherit.aes = FALSE,
+           r.accuracy = 0.01,
+           label.y.npc=0.05, label.x.npc = 0,
+           cor.coef.name = "r",
+           size = 3.8,
+           fontface = "bold")
+
+
+#green.up.day
+greenday <- met.stats %>% filter(stat == "green.up.day")%>%
+  ggplot(aes(x = macrophyte, y = value, col = as.factor(site.no)))+
+  geom_point(size = 3, alpha = 0.8)+
+  theme_classic()+
+  theme(legend.position = "null",
+        axis.text.y = element_text(margin = margin(r = 1)),
+        axis.title.y = element_text(margin = margin(r = -1.5)),
+        plot.margin = unit(c(0.1, 0.1, 0.1, 0.2), "cm"),
+        axis.title.x = element_blank(),
+  axis.text.x = element_blank())+
+  ylab(expression(paste("Green-up time (JD)" )))+
+  scale_colour_viridis_d(begin = 0, end = 0.8, direction  = 1)+
+  scale_x_continuous(limits = c(0, 68), expand = c(0.04,0))+
+  scale_y_continuous(limits = c(180, 276), expand = c(0.04,0))+
+   stat_cor(aes(x = macrophyte, y = value, label = after_stat(r.label)), 
+           method = "pearson", 
+           inherit.aes = FALSE,
+           r.accuracy = 0.01,
+           label.y.npc=0.05, label.x.npc = 0.6,
+           cor.coef.name = "r",
+           size = 3.8,
+           fontface = "bold")
+
+
+## green.up
+green <- met.stats %>% filter(stat == "green.up")%>%
+  ggplot(aes(x = macrophyte, y = value, col = as.factor(site.no)))+
+  geom_point(size = 3, alpha = 0.8)+
+  theme_classic()+
+  theme(legend.position = "null",
+        axis.text.y = element_text(margin = margin(r = 1)),
+        axis.title.y = element_text(margin = margin(r = -1.5)),
+        plot.margin = unit(c(0.1, 0.1, 0.1, 0.2), "cm"),
+        axis.text.x = element_blank(),
+        axis.title.x = element_blank(),)+
+  ylab(expression(paste("Green-up ", "(g O"[2], " m"^{-2}, " d"^{-1}," d"^{-1},")" )))+
+  scale_colour_viridis_d(begin = 0, end = 0.8, direction  = 1)+
+  scale_x_continuous(limits = c(0, 68), expand = c(0.04,0))+
+   stat_cor(aes(x = macrophyte, y = value, label = after_stat(r.label)), 
+           method = "pearson", 
+           inherit.aes = FALSE,
+           r.accuracy = 0.01,
+           label.y.npc=0.05, label.x.npc = 0.1,
+           cor.coef.name = "r",
+           size = 3.8,
+           fontface = "bold")
+
+
+
+## cv.gpp
+cv <- met.stats %>% filter(stat == "cv.gpp")%>%
+  ggplot(aes(x = macrophyte, y = value, col = as.factor(site.no)))+
+  geom_point(size = 3, alpha = 0.8)+
+  theme_classic()+
+  theme(legend.position = "null",
+        axis.text.y = element_text(margin = margin(r = 1)),
+        axis.title.y = element_text(margin = margin(r = -1.5)),
+        plot.margin = unit(c(0.1, 0.1, 0.1, 0.2), "cm"),
+        axis.title.x = element_blank())+
+  ylab("Coefficient of variation")+
+  scale_colour_viridis_d(begin = 0, end = 0.8, direction  = 1)+
+  scale_x_continuous(limits = c(0, 68), expand = c(0.04,0))+
+  scale_y_continuous(limits = c(0.18, 0.31), expand = c(0.04,0))+
+
+   stat_cor(aes(x = macrophyte, y = value, label = after_stat(r.label)), 
+           method = "pearson", 
+           inherit.aes = FALSE,
+           r.accuracy = 0.01,
+           label.y.npc=0.05, label.x.npc = 0,
+           cor.coef.name = "r",
+           size = 3.8,
+           fontface = "bold")
+
+
+## rbi.gpp
+rbi <- met.stats %>% filter(stat == "rbi.gpp")%>%
+  ggplot(aes(x = macrophyte, y = value, col = as.factor(site.no)))+
+  geom_point(size = 3, alpha = 0.8)+
+  theme_classic()+
+  theme(legend.position = "null",
+        axis.text.y = element_text(margin = margin(r = 1)),
+        axis.title.y = element_text(margin = margin(r = -1.5)),
+        plot.margin = unit(c(0.1, 0.1, 0.1, 0.2), "cm"),
+        #axis.text.x = element_blank(),
+        axis.title.x = element_blank())+
+  ylab("Richards-Baker index")+
+  scale_colour_viridis_d(begin = 0, end = 0.8, direction  = 1)+
+  scale_x_continuous(limits = c(0, 68), expand = c(0.04,0))+
+    scale_y_continuous(limits = c(0.053, 0.124), expand = c(0.04,0))+
+   stat_cor(aes(x = macrophyte, y = value, label = after_stat(r.label)), 
+           method = "pearson", 
+           inherit.aes = FALSE,
+           r.accuracy = 0.01,
+           label.y.npc=0.05, label.x.npc = 0,
+           cor.coef.name = "r",
+           size = 3.8,
+           fontface = "bold")
+
+
+title <- ggdraw() + 
+  draw_label(expression(paste("Macrophyte biomass (g AFDM/", m^2, ")")), 
+             size = 13, hjust = 0.4)
+
+
+plot2 <- plot_grid(gpXmb, maxg,maxgday,erXmb, green, greenday,npXmb,  cv, rbi, ncol = 3, align = "vh", 
+                   labels = c("(d)", "(e)","(f)","(g)","(h)","(i)","(j)","(k)","(l)"),
+                   label_size = 10.5,
+                   label_x = 0.23, label_y = 1.01)
+
+MBM <- plot_grid(plot2, title, ncol = 1, rel_heights = c(1, 0.05))
+
+
+## full page (3x4)
+pdf("Figures/TBxMetab.pdf", width = 7.5, height = 9.2)
+plot_grid(TABM, MBM, ncol = 1, rel_heights = c(.28, .72), align = "vh")
+dev.off()
+
+
+
+## 4x3 layout:
+
+plots_wide <- plot_grid(gpXbm, erXbm, npXbm,
+                        nrow = 3, align = "vh", byrow = T,
+                        labels = c("(a)", "(b)","(c)"),
+                        label_size = 10.5,
+                        label_x = 0.23, label_y = 1.01)
+
+title.TB.w  <- ggdraw() + 
+  draw_label(expression(paste("Total biomass (g AFDM/", m^2, ")")), size = 13, 
+             hjust = 0.4)
+TABM_wide <- plot_grid(plots_wide, title.TB.w, ncol = 1, rel_heights = c(1, 0.05))
+
+pdf("Figures/TBxMetab_wide.pdf", width = 9.8, height = 6.2)
+plot_grid(TABM_wide, NULL, MBM, ncol = 3, rel_widths = c(.24, 0.07, .76), align = "h")
+dev.off()
+
+```
+
+
+### Figure 2: Biomass and Cover Plots
+I have these in both orientations below:
+```{r, warning = F, echo = F,  fig.width = 6.2, fig.height = 3.2, fig.align = "center"}
+
+cov <- cover %>% 
+  pivot_longer(4:6, names_to = "spec_type", values_to = "Cover.Percent")
+  
+biom <- biomass %>% 
+  pivot_longer(4:6, names_to = "spec_type", values_to = "Mean.Biomass")%>%
+  left_join(cov, by = c("site.no", "river_mile", "site", "spec_type"))%>%
+  mutate(river.km = river_mile*1.60934)
+
+biom$spec_type = factor(biom$spec_type, levels = c("biofilm",  "algae", "macrophyte"))
+levels(biom$metric)
+
+ylab.names <- as_labeller(c("Biomass" = "Mean.Biomass", "Cover" = "Cover.Percent"))
+
+g <- expression(paste("Biomass (mg/m", m^2, ")"))
+
+cov <- biom %>% 
+  mutate(river.km = 304-river.km)%>%
+  ggplot(aes(x=river.km, y = Cover.Percent, group = spec_type, fill = spec_type))+
+  geom_area(position = "stack") +
+ scale_x_continuous(expand= c(0.01,0.01), breaks = c(0, 50, 100, 150, 200, 250, 300), 
+                     labels = c("0", "50", "100", "150", "200", "250", ""))+  
+  scale_y_continuous(expand= c(0.01,0.01))+
+  theme_classic()+
+  theme(legend.position = "null",
+        axis.text = element_text(size = 7),
+        legend.title = element_blank(),
+plot.margin=unit(c(0.2,0.2,0.2,0.2), "line"),        
+#axis.text.x = element_blank()
+)+
+scale_fill_viridis_d(option = "mako", begin = 0.9, end = 0.1)+
+  ylab("Cover (%)")+
+  xlab("")
+
+bio <- biom %>% 
+  mutate(river.km = 304-river.km)%>%
+  ggplot(aes(x=river.km, y = Mean.Biomass, group = spec_type, fill = spec_type))+
+  geom_area(position = "stack") +
+  scale_x_continuous(expand= c(0.01,0.01), breaks = c(0, 50, 100, 150, 200, 250), 
+                     labels = c("0", "50", "100", "150", "200", "250"))+
+ #xlab("km below Iron Gate Dam")+
+  xlab( "")+
+  scale_y_continuous(expand= c(0.01,0.01))+
+  theme_classic()+
+  theme(legend.position = c(0.62, 0.925),
+        axis.text = element_text(size = 7),
+        legend.title = element_blank(),
+        plot.margin=unit(c(0.2,0.2,0.2,0.2), "line"),
+        legend.key.size = unit(0.7,"line"),
+        legend.background = element_rect(fill=alpha(0.001)))+
+  ylab(expression(paste("Biomass (g AFDM/", m^2, ")")))+
+  scale_fill_viridis_d(option = "mako", begin = 0.9, end = 0.1, labels = c("Epilithon", "Filamentous algae", "Rooted macrophyte"))
+
+
+
+
+pdf("Figures/Biomass_Cover.pdf", width = 2.4, height = 4.1)
+plot_grid(cov, bio, ncol = 1)
+dev.off()
+
+
+pdf("Figures/Biomass_Cover_H.pdf", width = 4.5, height = 2.2)
+plot_grid(cov, bio, ncol = 2, align = "h")
+dev.off()
+
+
+
+```
+
+
+### Figure 1: Big metab plot:
+But just with GPP
+```{r, warning = F, echo = F,  fig.width = 7, fig.height = 3, fig.align = "center"}
+
+sn <- site.nos %>% 
+  mutate(site = ifelse(site == "ABC", "WB", site))
+site.lab <- sites%>% data.frame()%>%
+  rename(site = 1)%>%
+  mutate(GPP = 21, jday = 178)%>%
+  left_join(sn, by = "site")
+site.lab$site <- factor(site.lab$site, levels = sites)
+
+
+### derivative green up; not working: 
+gr.up.ar <- met.final%>%select(jday, gam.GPP, site)
+gr.up <- met.stats%>%filter(stat == "green.up.day")%>%
+  select(site, value)%>%
+  rename(jday = value)%>%
+  left_join(sn, by = "site")%>%
+  left_join(gr.up.ar, by = c("site", "jday"))%>%
+  filter(site != "HC")
+
+gr.up$site <- factor(gr.up$site, levels = sites)
+
+
+max.g.ar <- met.final%>%select(jday, gam.GPP, site)
+max.g <- met.stats%>%filter(stat == "max.gpp.day")%>%
+  select(site, value)%>%
+  rename(jday = value)%>%
+  left_join(sn, by = "site")%>%
+  left_join(max.g.ar, by = c("site", "jday"))%>%
+  filter(site != "HC")
+
+max.g$site <- factor(max.g$site, levels = sites)
+
+
+
+
+max.gpp <- met.stats%>%filter(stat == "max.gpp.day")
+max.gpp$site <- factor(max.gpp$site, levels = sites)
+
+gpp <- met.final%>% 
+  ggplot(aes(x = jday, y = GPP))+
+  geom_point(size = 0.5)+
+  geom_line(col = "grey10", lwd = 0.4)+
+  geom_line( aes(x = jday, y = gam.GPP, col = as.factor(site.no)),  lwd = 1.8, alpha = 0.6)+
+  facet_wrap(~site.no, nrow = 6, scales = "free")+
+  theme_bw()+
+  theme(legend.position = "null",
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        strip.background = element_blank(),
+        panel.border = element_rect(color = "grey"),
+        strip.text.x = element_blank(),
+        panel.spacing = unit(1, "lines"),
+        axis.ticks.length = unit(-0.09, "cm"),  # Negative value moves ticks inside
+       axis.text.x = element_text(margin = margin(t = -11)),  # Move x-axis labels inside
+       axis.text.y = element_text(margin = margin(r = -13))
+       )+
+  geom_text(aes(y = GPP, x = jday, label = as.factor(site.no), col = as.factor(site.no)), data = site.lab, vjust = 1, hjust = -1, size = 5, fontface = "bold")+
+ scale_colour_viridis_d(begin = 0, end = 0.8, direction  = 1)+
+ geom_segment(data = gr.up, aes(x = jday-7, y = gam.GPP+2.5, xend = jday, yend = gam.GPP+0.8),   arrow = arrow(length = unit(0.26, "cm")), col = "#FBB91FFF", lwd = 1, alpha = 0.9)+
+geom_segment(data = max.g, aes(x = jday+7, y = gam.GPP+2.5, xend = jday, yend = gam.GPP+0.8), arrow = arrow(length = unit(0.26, "cm")), col = "#B1325AFF", lwd = 1, alpha = 0.9)+  
+  annotate(geom="text", x=3, y=30, label="Peak GPP", color="#B1325AFF")+
+  ylab(expression(paste("GPP ", "(g O"[2], " m"^{-2}, " d"^{-1},")" )))+
+  xlab("")+
+  scale_y_continuous(limits = c(0, 23), 
+                     labels = c(" ", 5, 10, 15, 20), 
+                     breaks=c(0, 5, 10, 15, 20), 
+                     expand = c(0.03,0))+
+  scale_x_continuous(limits = c(162, 278), 
+                     breaks = c(182, 213, 244), 
+                     labels = c("Jul", "Aug", "Sep"))
+
+
+
+
+
+pdf("Figures/GPP.pdf", width = 4.8, height = 11)
+gpp
+dev.off()
+
+```
+
+
+### Figure 4: Proportion of heterotrophic days increased with increasing aquatic plant biomass, driven by late-season heterotrohpy at these sites
+The late season high ER relative to GPP seems to be the main thing causing higher seasonal ER/NEP at sites with high macrophyte coverage. This figure would be a later figure in the manuscript, because it explains the why behind the correlations.
+```{r, warning = F, echo = F,  fig.width = 6.5, fig.height = 5, fig.align = "center", eval =F}
+
+hist.bm <- biom %>% 
+  filter(spec_type=="macrophyte")%>%
+  mutate(r.biom = round(Mean.Biomass))%>%
+    select(site.no, Mean.Biomass, r.biom)%>%
+    mutate(gam.GPP = 2.8, gam.ER = -18, jday = 200)
+
+sn <- met.final%>% 
+  bind_rows(new.dat)%>%
+  group_by(site)%>%
+  distinct(site.no)%>%
+  mutate(gam.GPP = 20.5, gam.ER = -1, jday = 200)%>%
+  mutate(site.no = as.factor(site.no))
+
+
+new.dat <- as.data.frame(1.5) %>% rename(site.no = "1.5")
+met.fin <- met.final %>% bind_rows(new.dat)
+
+hist <- met.fin %>% 
+ggplot( aes(x = GPP, y = ER))+
+  geom_point(col = "grey70", size = 2.2, alpha = 0.3)+
+  geom_abline(slope = -1, intercept = 0, lty = 2)+
+  geom_point(data = met.fin, aes(x = gam.GPP, y = gam.ER, col = jday),       
+             alpha = 0.75, size = 0.9)+
+  scale_color_viridis_c(option = "inferno", begin = 0.95, end = 0.05, direction  = 1, name = "Julian day")+
+  theme_bw()+
+  facet_wrap(~site.no, ncol = 2)+
+  scale_x_continuous( labels = c("", 5, 10, 15, 20), breaks=c(0, 5, 10, 15, 20), limits = c(0, 22), expand = c(0,0))+
+  scale_y_continuous( labels=c(-20, -15, -10, -5, ""), breaks=c(-20, -15, -10, -5, 0), limits = c(-22, 0), expand = c(0,0))+
+  theme(legend.position = c(0.76, 0.06),
+        legend.direction="horizontal",
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        strip.background = element_blank(),
+        panel.border = element_rect(color = "black"),
+        strip.text.x = element_blank(),
+        panel.spacing = unit(0.1, "lines"),
+        axis.text.y = element_text(margin = margin(r = 1)),
+        axis.title.y = element_text(margin = margin(r = -1)))+
+  coord_fixed(ratio = 1)+
+  guides(colour=guide_colourbar(barwidth=5.6, 
+                                barheight = 1.2,
+                                title.position="top", 
+                                title.hjust = 0.5))+
+  xlab(expression(paste("GPP ", "(g O"[2], " m"^{-2}, " d"^{-1},")" )))+
+  ylab(expression(paste("ER ", "(g O"[2], " m"^{-2}, " d"^{-1},")" )))+
+  new_scale_colour()+
+  geom_text(data = sn, aes(x = gam.GPP, y = gam.ER, label = site.no, col = site.no),  vjust = 1, hjust = 0.8, fontface = "bold", size = 4.2, show.legend = F)+
+  geom_point(data = sn, aes(x = gam.GPP-0.6, y = gam.ER-1.1, col = site.no),  shape = 1, vjust = 2, hjust = 2, size = 6.6, show.legend = F)+
+  scale_colour_viridis_d( begin = 0, end = 0.85, direction  = 1)
+#geom_text(aes(x = gam.GPP, y = gam.ER, label = r.biom), data = hist.bm, vjust = 1, col = "forestgreen", size = 5.4)
+
+pdf("Figures/hist.pdf", width = 3.5, height = 8)
+hist
+dev.off()
+  
+  
+## for pie chart that goes with fig. 4 (in inkscape)
+
+data <- biom %>% select(site.no, spec_type, Mean.Biomass)%>%
+  rename(value = Mean.Biomass, site = site.no)%>%
+  group_by(site)%>%
+  mutate(total = sum(value))%>%
+  mutate(prop = value/total)%>%
+  mutate(cp1=c(0,head(cumsum(prop),-1)),
+              cp2=cumsum(prop))
+
+  pie <- ggplot(data) + 
+  geom_rect(data = data, aes(xmin=0,xmax=total,ymin=cp1,ymax=cp2,fill=spec_type))+
+  coord_polar(theta = "y") + 
+  facet_wrap( ~site)+
+  theme_void() +  # Removes axes and gridlines
+  theme(legend.position = "bottom") +  # Adjust legend position if needed
+  labs(fill = "Spec Type") +
+   scale_fill_viridis_d(option = "mako", begin = 0.9, end = 0.1, labels = c("Epilithon", "Filamentous algae", "Rooted macrophyte"), name = "Taxa")
+
+pdf("Figures/hist_pie.pdf", width = 3.5, height = 8)
+pie
+dev.off()
+
+```
+
+
+
+
+
+
+
+
+### Big metab plot:
+This is ugly. I'm going to include the ER in the pub (will go in SI)
+```{r, warning = F, echo = F,  fig.width = 6.5, fig.height = 6, fig.align = "center", eval = T}
+
+gr.up <- met.stats%>%filter(stat == "green.up.day")
+gr.up$site <- factor(gr.up$site, levels = sites)
+
+max.gpp <- met.stats%>%filter(stat == "max.gpp.day")
+max.gpp$site <- factor(max.gpp$site, levels = sites)
+
+met.final%>% 
+ggplot(aes(x = jday, y = GPP))+
+geom_point(size = 0.3)+
+geom_line(col = "grey30", lwd = 0.4)+
+geom_hline(yintercept = 0, lty = 2, lwd = 0.5)+
+geom_line( aes(x = jday, y = gam.GPP), col = "cyan4", lwd = 1.5, alpha = 0.6)+
+
+geom_point(aes(x = jday, y = ER), size = 0.3)+
+geom_line(aes(x = jday, y = ER), col = "grey30", lwd = 0.4)+
+geom_line(aes(x = jday, y = gam.ER), col = "chocolate4", lwd = 1.5, alpha = 0.5)+
+  
+facet_wrap(~site, nrow = 3)+
+theme_classic()+
+#scale_y_continuous(limits = c(0, 24), labels = c(0, 5, 10, 15, 20), breaks=c(0, 5, 10, 15, 20))+
+ylab(expression(paste("GPP ", "(g O"[2], " m"^{-2}, " d"^{-1},")" )))+
+
+geom_vline(data = gr.up, aes(xintercept = value))+
+geom_vline(data = max.gpp, aes(xintercept = value))
+             
+```
+
+
+
+
+
+### This plot is going in the SI; data from Appling/Savoy
+This is data from Appling that Savoy filtered out. I need to revisit the Savoy paper to find out specifically which sites I selected here. Hopefully I have that documented somewhere!!!
+
+The folder for this is in Klamath 2020/other_rivers
+```{r, warning = F, echo = F,  fig.width = 6.2, fig.height = 3.2, fig.align = "center"}
+
+other <- read.table(file = 'Data/final_data/daily_predictions.tsv', sep = '\t', header = TRUE)  
+  
+  o.sites <- c("nwis_01480617",
+             "nwis_01480870",
+             "nwis_01493112",
+             "nwis_01548303",
+             "nwis_01608500",
+             "nwis_01611500",
+             "nwis_01632900",
+             "nwis_01645704",
+             "nwis_01646305",
+             "nwis_01648010",
+             "nwis_01649190",
+             "nwis_01650800",
+             "nwis_01656903",
+             "nwis_01673000",
+             "nwis_02101726",
+             "nwis_02110500",
+             "nwis_02160105",
+             "nwis_02160700",
+             "nwis_02203655",
+             "nwis_02217643",
+             "nwis_02266200",
+             "nwis_02266300",
+             "nwis_02336152",
+             "nwis_23362095",
+             "nwis_02336300",
+             "nwis_02336313",
+             "nwis_02336410",
+             "nwis_02336526",
+             "nwis_03067510",
+             "nwis_04121944",
+             "nwis_04121970",
+             "nwis_04125460",
+             "nwis_04136900",
+             "nwis_04137005",
+             "nwis_04166500",
+             "nwis_04176500",
+             "nwis_04213500",
+             "nwis_05435943",
+             "nwis_07075250",
+             "nwis_07075270",
+             "nwis_07143672",
+             "nwis_07177500",
+             "nwis_08052745",
+             "nwis_10133980",
+             "nwis_11044000",
+             "nwis_11273400",
+             "nwis_14206950")
+
+  o <- other %>% dplyr::select(date, GPP, ER, site_name)%>%
+    mutate(date = as.Date(date))%>%
+    mutate(jday = yday(date))%>%
+    mutate(year = year(date))%>%
+    filter(site_name %in% o.sites)%>%
+    filter(jday > 170 & jday < 275) %>%
+    filter(year == "2016")%>%
+    mutate(site = "Appling et al. 2018 &\nSavoy et al. 2019")
+
+
+  
+  
+```
+
+```{r, warning = F, echo = F,  fig.width = 6.2, fig.height = 3.2, fig.align = "center"}
+head(o)
+head(met.final)
+
+mf <- met.final %>% select(GPP, ER, site)%>%
+  mutate(loc = "Klam")
+
+mean(o$GPP, na.rm = T)
+mean(mf$GPP, na.rm = T)
+
+mean(o$ER, na.rm = T)
+mean(mf$ER, na.rm = T)
+
+mean(o$GPP+o$ER, na.rm = T)
+mean(mf$GPP+mf$ER, na.rm = T)
+
+
+o %>% select(GPP, ER, site_name)%>%
+  rename(site = site_name)%>%
+  mutate(loc = "Other")%>%
+  bind_rows(mf)%>%
+  ggplot(aes(x = GPP, col = loc, fill = loc))+
+  geom_density(alpha = 0.6)
+
+o %>% select(GPP, ER, site_name)%>%
+  rename(site = site_name)%>%
+  mutate(loc = "Other")%>%
+  bind_rows(mf)%>%
+  group_by(site)%>%
+  summarize(mgpp = mean(GPP, na.rm = T))%>%
+  filter(mgpp >5)
+
+o %>% select(GPP, ER, site_name)%>%
+  rename(site = site_name)%>%
+  mutate(loc = "Other")%>%
+  bind_rows(mf)%>%
+  group_by(site)%>%
+  summarize(mer = mean(ER, na.rm = T))%>%
+  filter(mer < -5)
+
+o %>% select(GPP, ER, site_name)%>%
+  rename(site = site_name)%>%
+  mutate(loc = "Other")%>%
+  bind_rows(mf)%>%
+  mutate(nep = GPP + ER)%>%
+  group_by(site)%>%
+  summarize(mnep = mean(nep, na.rm = T))%>%
+  filter(mnep > 1)
+
+
+```
+
+```{r, warning = F, echo = F,  fig.width = 6.2, fig.height = 3.2, fig.align = "center"}
+
+
+
+p1 <-  ggplot(o, aes(x = jday, y = GPP, group = site_name))+
+  geom_line(col = "grey60", alpha = 0.3, lwd = 0.5)+
+  geom_hline(yintercept = 0, lty = 2)+
+  geom_line(data = met.final, aes(x = jday, y = GPP, col = as.factor(site.no), group = site.no),
+            lwd = 1.4, alpha = 0.6)+
+  scale_colour_viridis_d(begin = 0, end = 0.8, direction  = 1)+
+  theme_classic()+
+  theme(legend.position = "null",
+        aspect.ratio=1)+
+  xlab("Date")+
+  ylab(expression(paste("Metabolic flux ", "(g O"[2], " m"^{-2}, " d"^{-1},")" )))+
+  geom_line(data = o, aes(x = jday, y = ER, group = site_name), col = "grey60", alpha = 0.3, lwd = 0.5)+
+  geom_line(data = met.final, aes(x = jday, y = ER, col = as.factor(site.no), group = site.no), lwd = 1.4, alpha = 0.6)+
+  scale_y_continuous(limits = c(-28, 28), expand = c(0,0))+
+  scale_x_continuous(breaks = c(182, 213, 244, 274), labels = c("1 Jul", "1 Aug", "1 Sep", "1 Oct"))
+
+p2 <- 
+  ggplot(o, aes(x = GPP, y = ER))+
+  geom_point(col = "grey50", alpha = 0.15, size = 1.4)+
+  geom_abline(yintercept = 0, slope = -1, lty = 2)+
+  geom_point(data = met.final, aes(x = GPP, y = ER, col = as.factor(site.no)), alpha = 0.8, size = 0.8)+
+  scale_colour_viridis_d(begin = 0, end = 0.8, direction  = 1)+
+  theme_classic()+
+   theme(legend.position = c(0.92, 0.61),
+        #legend.key.width = unit(0.1, "cm"),
+        #legend.key.size = unit(0.35, "cm"),
+        legend.spacing.y = unit(-0.18, 'cm'),
+        legend.spacing.x = unit(-0.05, 'cm'),
+        aspect.ratio=1)+
+  ylab(expression(paste("ER ", "(g O"[2], " m"^{-2}, " d"^{-1},")" )))+
+  xlab(expression(paste("GPP ", "(g O"[2], " m"^{-2}, " d"^{-1},")" )))+
+  scale_x_continuous(limits = c(0, 28), expand = c(0,0))+
+  scale_y_continuous(limits = c(-28, 0), expand = c(0,0))+
+  guides(col=guide_legend(title="Site", 
+                          override.aes = list(size=2, alpha = 1, linetype = rep(1,11), lwd =                            rep(2,11)),  byrow = TRUE),
+         title.position = "top", title.vjust = 2)
+
+
+pdf("Figures/Metab_w_Others.pdf", width = 6.2, height = 3.2)
+plot_grid(p1, p2, ncol = 2)
+dev.off()
+
+```
+

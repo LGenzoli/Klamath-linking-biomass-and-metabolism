@@ -1,0 +1,451 @@
+---
+title: 'Appendix S2: Klamath Vegetation Cover-Biomass Scaling'
+author: "Laurel Genzoli"
+date: "3/24/2021"
+output:
+   pdf_document:
+    highlight: tango
+editor_options: 
+  markdown: 
+    wrap: 72
+  chunk_output_type: console
+---
+
+```{=html}
+<style type="text/css">
+body, td {font-size: 12px;}
+code.r{font-size: 8px;}
+pre {font-size: 10px}
+</style>
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = F, message = F)
+knitr::opts_knit$set(root.dir = '/Users/laurelgenzoli/Dropbox/2018-2022_PHD/2019_Klamath/For_GitHub')
+def.chunk.hook  <- knitr::knit_hooks$get("chunk")
+knitr::knit_hooks$set(chunk = function(x, options) {
+  x <- def.chunk.hook(x, options)
+  ifelse(options$size != "normalsize", paste0("\n \\", options$size,"\n\n", x, "\n\n \\normalsize"), x)
+})
+
+```
+## Script Overview:
+
+The following code scales percent cover of macrophytes, filamentous algae, and biofilms to biomass (g AFDM/m$^2$) on the Klamath River, CA. We surveyed percent cover of macrophytes and filamentous algae in 2019, and used biomass samples from 2019 and 2020 to create scaling relationships between biomass and cover based on taxa type and the length of filaments.  
+
+<br>
+<br>
+
+### Load libraries and data
+Data is in 3 data files; 1 for periphyton scrubbed from rocks, and one each for 2019 and 2020 samples of macrophytes and filamentous algae.
+
+```{r, warning=F, message=F, size = "tiny"}
+library(tidyverse)
+library(lubridate)
+library(brms)
+
+
+setwd("/Users/laurelgenzoli/Dropbox/2018-2022_PHD/2019_Klamath/For_GitHub")
+rock_bm <- read.csv("Data/biomass_raw/2019_Rock_Biomass.csv")%>%
+  mutate(site = gsub('[[:digit:]]+', "", sample))%>%
+  filter(site != "Scott") %>% filter(site != "Salmon")%>%
+  mutate(site = replace(site, site =="I", "I5"))
+bm_2019 <- read.csv("Data/biomass_raw/2019_Veg_Biomass.csv")
+bm_2020 <- read.csv("Data/biomass_raw/2020_Veg_Biomass.csv")
+```
+<br>
+<br>
+
+###  Calculate Periphyton Rock Biomass
+For periphyton rock biomass samples, rocks were scrubbed, and the slurry (or a sub-sampled volume of the slurry) was filtered on to a 47mm glass fiber filter. We traced the scrubbed rock on to paper (using paper from the same satchel of write in the rain printer paper for all samples), and we cut out the traced rock area, and weighed each rock area using a 4-point balance. We used the linear relationship between paper of a known area and measured weight to scale each rock to area based on the weight of the paper cut-out. 
+
+We calculated biomass for each sample as the AFDM scaled to g/m$^2$:
+
+$$AFDM_{scaled, i} = \frac{V_{total,i}}{V_{filtered,i}} \times{AFDM_{filter,i}} \times \frac{1}{A_{i}}$$
+for each sample $i$. $V_{total}$ is the total volume (mL) of slurry scrubbed from the rock, $V_{filtered}$ is the volume (mL) of the slurry sub-sampled and filtered on to the glass fiber filter, $AFDM_{filter}$ is the dry weight of the filter minus the weight post ashing, and $A$ is the area of the rock (m$^2$) for a given sample, as calculated below. 
+
+The result of the following calculations are a AFDM (g/m2) for each rock.
+
+```{r, warning=F, fig.width = 6, fig.height= 3, fig.align="center", size = "small"}
+
+page_area <- c(0, rep(8.5*11*0.00064516, 5))##paper area scaled to m^2 (0.00064516 to go from sq inch to sq m)
+page_weight <- c(0, 5.9437, 5.9274, 6.0271, 5.953, 5.8888)##weighed 5 sheets of paper (g); 0 paper weighs 0g
+
+rock_area <- lm(page_area ~ page_weight) ## lm to scale rock-paper mass to rock area
+
+calc_rock_bm <- rock_bm %>% 
+  mutate(rock_area = rock_area$coef[2]*rock_paper_W+rock_area$coef[1])%>%
+  mutate(biomass_per_m2 = (total_volume/filter_volume)*AFDM_1*(1/rock_area))%>%
+  filter(Flag_to_remove == 0)
+```
+<br>
+<br>
+
+
+###  Calculate AFDM from lab spreadsheet for 2019 samples
+In 2019 we used the 8-inch diameter stove pipe to sample aquatic plants and filamentous algae. The majority of samples were collected from areas of 100% cover, but there may have been a few samples of <100%, so we multiplied it by the percent cover in the spreadsheet to account for any samples that were not from an area of 100% cover.
+
+We calculated AFDM as the dry weight minus the post ashing weight, which for these larger samples, required 2-3 ashing cycles to confirm complete combustion. We scaled the sample AFDM in each sample ($i$) to biomass in g/m$^2$ as:
+
+$$ AFDM_{scaled, i} = \frac{AFDM_{sample, i}}{A \times \%cover_i}$$
+Where $AFDM_{sample}$ is the mass of the sample, $A$ is the area of the stove pipe, and $\%cover$ is the coverage of the sampled vegetation (generally 100%).
+
+```{r, warning = F, size = "small"}
+calc_bm_2019 <- bm_2019 %>% 
+select(date, site_code, type, species, 
+    condition, per_cover, plant_length_cm,
+    dry_weight, Foil_Dry_Mass_20200824, Final_Weight) %>%
+  mutate(cover_area = (3.14*(4*0.0254)^2)*(per_cover/100)) %>% #
+  mutate(afdm = Foil_Dry_Mass_20200824 - Final_Weight) %>%
+  mutate(biomass_per_m2 = afdm*(1/cover_area))
+```
+<br>
+<br>
+
+###  Calculate AFDM from lab spreadsheet for 2020 samples
+We calculated AFDM for additional samples collected in 2020 to supplement the samples from 2019. These samples were collected from an area of 0.16 m$^2$ (the survey quad), but samples were sub-sampled for field drying and ashing (rather than bringing the entire sample back to the lab as we did in 2019). We used coffee filters for the large biomass samples (essentially made "green chunk pour-overs") since it was way too much biomass to get on a 47mm GFF and seemed like a way to not loose mass when transferring from drying to ashing to weighing. Coffee filters fully combusted, so we subtracted the mass of the combusted coffee filter from the AFDM of each sample. Further, the AFDM of the sample here was scaled up to account for the sub-sampling in the field, based on the wet weight of the full sample and proportion of the sub-sample measured in the field. These 2020 samples were only for macrophytes; we only used 2019 samples for algae relationships.
+
+```{r, warning = F, size = "small"}
+
+calc_bm_2020 <- bm_2020 %>% 
+select(date, site_code, type, species, 
+                condition, per_cover, plant_length_cm,
+                wet_weight_nobag_bucket, sub_weight, sample_area,
+                RockPaperW, dryW, dryW_foil_forAshing, 
+                Weight2_PostAsh20201204, AFDM_CF, RockPaperW)%>%
+  mutate(sample_area = as.numeric(sample_area))%>%
+  mutate(cover_area = sample_area*(per_cover/100)) %>%
+  mutate(afdm = (dryW_foil_forAshing - Weight2_PostAsh20201204) - AFDM_CF) %>%
+  mutate(biomass_per_m2=(wet_weight_nobag_bucket/sub_weight)*afdm*(1/cover_area))
+```
+<br>
+<br>
+
+###  Merge all biomass data and plot
+Here is data from all of the biomass samples, plotted by filament length. Filaments for biofilm are set to 0.1, just so we can see it on the plot. These plots show that both filament length and taxon will be needed to scale cover to biomass.
+
+```{r, warning = F, message = F, fig.width = 8, fig.height= 3, fig.align="center", size = "small"}
+bind19 <- calc_bm_2019 %>% 
+  select(date, site_code, type, species, condition, 
+         plant_length_cm, biomass_per_m2)
+
+bind20 <- calc_bm_2020 %>% 
+  select(date, site_code, type, species, condition, 
+         plant_length_cm, biomass_per_m2)
+
+bind_rock <- calc_rock_bm %>% 
+  select(site, biomass_per_m2) %>%
+  mutate(type = "biofilm")%>%
+  mutate(species = "biofilm")%>%
+  mutate(plant_length_cm = 0.1) %>%
+  rename(site_code = site)
+
+biomass <- bind_rows(bind19, bind20, bind_rock)%>%
+  mutate(year = year(as.Date(date)))
+
+biomass %>% 
+ggplot(aes(y = biomass_per_m2, x = plant_length_cm, col = species))+
+  geom_point(size = 2.6, alpha = 0.8)+
+  scale_color_viridis_d()+
+  facet_wrap(~type)+
+  theme_classic()
+```
+<br>
+<br>
+
+### Calculate Scaling Parameters
+We used separate models for macrophytes and algae, using the same model structure for each, where Biomass for sample $i$ in taxon group $j$ is dependent on the intercept ($\beta_{0j}$) and slope ($\beta_{1j}$) for a given taxon group and the length of the filament for the given sample. 
+
+$$Biomass_{i,j} = \beta_{0j} + \beta_{1j} L_{i} + e_{i,j} $$
+
+We used a variable slope, variable intercept model to give the model the most flexibility in predicting biomass based on the sample data, although we put a strong prior on the intercept, since plants or algae with length 0 would have biomass 0, despite not actual collection of this data. We did not incorporate the plant condition (collected as part of the field data), because the improvement to the R$^2$ value between data and predicted values was less than 0.01 for both filamentous algae and macrophyte models. 
+
+<br>
+<br>
+
+### Macrophyte Model
+We used package brms to estimate the posterior probability distribution of the of the slope and intercept for 5 species of macrophytes that we sampled. We also estimated the global parameter (the mean slope of all species) to use in scaling the macrophyte species observed during surveys which we did not collect biomass samples for (CEDE).
+
+This code may take a few minutes to run due to the number of iterations.
+
+```{r, warning = F, message = F, results = F, fig.width = 6, fig.height= 3, fig.align="center", size = "small"}
+plants <- biomass %>% filter (type == "plant")
+
+bm_plant1 <- brm(biomass_per_m2 ~ 0 + intercept + plant_length_cm + ( plant_length_cm|species), 
+             data = plants, 
+             iter= 2000, 
+             warmup = 1000,
+             control = list(adapt_delta = 0.99), chains = 4,
+             family = "gaussian",
+             prior = prior(normal(0, 10), class = "b", coef=intercept))
+
+bm_plant1.global <- brm(biomass_per_m2 ~ 0 + intercept + plant_length_cm, 
+             data = plants, 
+             iter= 2000, 
+             warmup = 1000,
+             control = list(adapt_delta = 0.99), chains = 4,
+             family = "gaussian",
+             prior = prior(normal(0, 10), class = "b", coef=intercept))
+
+
+coef_bm_plant <-
+  as.data.frame(coef(bm_plant1)$species) %>%
+  tibble::rownames_to_column("species")%>%
+  select(1,2,6)%>%
+  rename(species = species, inter = Estimate.Intercept, sl = Estimate.plant_length_cm)%>%
+  full_join(plants, by = "species")
+global.plant <- data.frame(fixef(bm_plant1.global))
+```
+
+### Plant model output:
+This plot shows the relationship for each plant species and the global parameter relationship (thick black line)
+
+```{r, warning = F, message = F, results = F, fig.width = 5, fig.height= 4, fig.align="center", size = "small"}
+
+ggplot(coef_bm_plant, aes(x = plant_length_cm, y = biomass_per_m2, col = species))+
+  geom_abline(data = global.plant, aes(slope = Estimate[2], intercept = Estimate[1]), col = "grey30", lwd = 1.5)+
+  geom_point()+
+  geom_abline(aes(slope = sl, intercept = inter, col = species))+
+  ylim(c(0, 400))+
+  xlim(c(0, 180))+
+  theme_classic()
+
+```
+<br>
+<br>
+
+###  Algae Model
+We used package brms to estimate the posterior probability distribution of the of the slope and intercept for Ulothrix and Cladophora, the two genera of algae that displayed similar patterns in biomass and filament length. We excluded Oedogodium and the Cladophoracea (sample A) with a low-growing dense mat structure due to limited samples and because the biomass was much higher at the relative plant thickness of these samples than for Ulothrix and Cladophora. For these, we used the mean of the samples for each taxon to scale with. We calculated the mean relationship for filamentous algae to apply to SPIR and unknown greens, which had similar growth forms to Cladophora and Ulothrix in our samples. 
+
+```{r, warning = F, message = F, results = F, fig.width = 6, fig.height= 3, fig.align="center", size = "small"}
+
+algae <- biomass %>% filter (type == "algae") %>%
+  filter(!species %in% c("OEDO", "sample A"))
+  
+bm_alg1 <- brm(biomass_per_m2 ~ 0 + intercept + plant_length_cm + (plant_length_cm|species), 
+             data = algae, 
+             iter= 2000, 
+             warmup = 1000,
+             control = list(adapt_delta = 0.99), chains = 4,
+             family = "gaussian",
+             prior = prior(normal(0, 10), class = "b", coef=intercept))
+
+bm_alg1.global <- brm(biomass_per_m2 ~ 0 + intercept + plant_length_cm, 
+             data = algae, 
+             iter= 2000, 
+             warmup = 1000,
+             control = list(adapt_delta = 0.99), chains = 4,
+             family = "gaussian",
+             prior = prior(normal(0, 10), class = "b", coef=intercept))
+
+coef_bm_alg <-
+  as.data.frame(coef(bm_alg1)$species)%>%
+  rownames_to_column("species")%>%
+  select(1,2,6)%>%
+  rename(species = species, inter = Estimate.Intercept, sl = Estimate.plant_length_cm)%>%
+  full_join(algae, by = "species")
+
+global.alg <- data.frame(fixef(bm_alg1.global))
+
+```
+### Algae model output:
+This plot shows the relationship for each algal taxon and the global parameter relationship (thick black line)
+
+```{r,  warning = F, message = F, results = F, fig.width = 5, fig.height= 4, fig.align="center", size = "small"}
+
+  ggplot(coef_bm_alg, aes(x = plant_length_cm, y = biomass_per_m2, col = species))+
+  geom_abline(data = global.alg, aes(slope = Estimate[2], intercept = Estimate[1]), col = "grey30", lwd = 1.5)+
+  geom_point()+
+  geom_abline(aes(slope = sl, intercept = inter, col = species))+
+  ylim(c(0, 400))+
+  xlim(c(0, 180))+
+  theme_classic()
+
+```
+
+<br>
+<br>
+
+###  Scale percent cover to biomass
+Here, we calculate biomass from the percent cover estimates from field surveys using scaling parameters from above. We assign the scaling coefficients calculated above to each taxon in field surveys, then calculate biomass based on the intercept and slope for the taxa from the above relationships for taxa from the field surveys. For macrophytes or algae that we did not sample for biomass that have similar growth forms to plants and algae with modeled scaling parameters, we used the global parameters to estimate biomass. For taxa that did not have a length-biomass linear model assigned to it, we used the mean of the biomass sample for scaling. 
+
+These species were in my surveys, but I don't have scaling relationships from models above: ANAB, GOMP, PHOR, OEDO, Sample_A, SPIR, UNKN_GREEN, and CEDE.  ANAB, GOMP, PHOR are heavy biofilms, so I used biomass measurements of my gunkiest rocks to assign biomass to these taxa. I used the single measurements that I had for each of Sample A and OEDO. For SPIR and my unknown green (both with filament lengths), I used the global coefficients from the algae model and for CEDE I used the global coefficients from the macrophyte model.
+
+
+```{r, eval = T, warning = F, message = F, results = F, fig.width = 6, fig.height= 3, fig.align="center", size = "small"}
+
+cover2019 <- read.csv("Data/biomass_raw/plants_2019_full.csv")
+
+## Prepare data from of scaling coefficients for each taxon:
+## These are slopes and intercepts from the models:
+
+fix_ef_plant <- as.data.frame(fixef(bm_plant1.global))%>%
+  rownames_to_column("coef_type")%>%
+  select(1:2)%>%
+  spread(coef_type, Estimate)%>%
+  mutate(spec_code = "mean_plant") %>%
+  rename(slope = plant_length_cm)
+
+coef_bm_plant <- as.data.frame(coef(bm_plant1)$species)%>%
+  rownames_to_column("species")%>%
+  select(1,2,6)%>%
+  rename(spec_code = species, 
+         intercept = Estimate.Intercept, 
+         slope = Estimate.plant_length_cm)
+
+fix_ef_alg <- as.data.frame(fixef(bm_alg1.global)) %>%
+  rownames_to_column("coef_type")%>%
+  select(1:2)%>%
+  spread(coef_type, Estimate)%>%
+  mutate(spec_code = "mean_algae") %>%
+  rename(slope = plant_length_cm)  
+
+coef_bm_alg <- as.data.frame(coef(bm_alg1)$species) %>%
+  rownames_to_column("species")%>%
+  select(1,2,6)%>%
+  rename(spec_code = species, intercept = Estimate.Intercept, slope = Estimate.plant_length_cm)
+ 
+
+## Estimating scaling coefficients (means) for biomass from non-filamentous taxa:
+## OEDO, Sample-A, and thick biofilm (for ANAB, GOMP, and PHOR):
+
+bm_oedo <- biomass%>%filter(species == "OEDO")%>%select(biomass_per_m2) 
+bm_sampA <- biomass%>%filter(species == "sample A")%>%select(biomass_per_m2) 
+thick_biofilm <- biomass%>%filter(type == "biofilm")%>%
+  select(biomass_per_m2)%>% 
+  filter(biomass_per_m2 > quantile(biomass_per_m2, 0.9, na.rm = T))%>%
+  summarize(thick_biofilm = mean(biomass_per_m2, na.rm = T))
+
+
+### Bind the data frames with biomass coefficients and add rows for more taxa:
+
+preds <- coef_bm_plant %>% bind_rows(coef_bm_alg, fix_ef_plant, fix_ef_alg)%>%
+  add_row(spec_code ="CEDE", intercept = fix_ef_plant$intercept,   slope=fix_ef_plant$slope)%>%
+  add_row(spec_code ="SPIR",  intercept = fix_ef_alg$intercept, slope= fix_ef_alg$slope)%>%
+  add_row(spec_code ="UNKN_GREEN", intercept = fix_ef_alg$intercept, slope= fix_ef_alg$slope)%>%
+  add_row(spec_code ="ANAB",  intercept = thick_biofilm[1,1], slope= 0)%>%
+  add_row(spec_code ="GOMP",  intercept = thick_biofilm[1,1], slope= 0)%>%
+  add_row(spec_code ="PHOR",  intercept = thick_biofilm[1,1], slope= 0)%>%
+  add_row(spec_code ="OEDO",  intercept = bm_oedo[1,1], slope= 0)%>%
+  add_row(spec_code ="Sample_A", intercept = bm_sampA[1,1], slope= 0)
+
+## this is grams/0.16 m2 quadrant for every taxa and every quad
+## many 0s b/c most taxa were not in most quads
+## NAs are not surveyed quads; 0 is that taxa was not in that quad
+
+biomass2019 <- cover2019 %>% left_join(preds, by = "spec_code") %>%
+  mutate(biomass=(intercept + slope * strand_length) * (per_cover * 0.01) * 0.16)%>%
+  mutate(biomass = replace(biomass, is.na(biomass), 0))%>%
+  mutate(biomass = replace(biomass, is.na(per_cover), NA))
+
+```
+
+### Plots showing biofilm mass at all sights
+Despite some variation among sites, we decided to combine all biomass samples (4x site) to estimate the biomass of the area not covered by filamentous algae or macrophytes.
+
+```{r, warning = F, message = F, results = F, fig.width = 5, fig.height= 2.4, fig.align="center"}
+
+biomass %>% 
+  filter(type == "biofilm")%>%
+ggplot(aes(x = site_code, y = biomass_per_m2, col = site_code, fill = site_code))+
+  geom_boxplot(alpha = 0.7)+
+  theme_classic()+
+  scale_color_viridis_d()+
+  scale_fill_viridis_d()+
+  theme(legend.position = "null")
+  
+```
+<br>
+<br>
+
+
+### Final data shwanking 
+Here, we summarize the biomass per species observed from above to reach level means of percent cover and biomass for each of the 3 categories of primary producers. In data frame above, biomass was converted to biomass per quadrant, where as below, we calculate mean biomass per reach as g AFDM/m${^2}$. We calculate biofilm as the percent cover not covered by macrophytes or filamentous algae during surveys, and scale the estimated AFDM (g/m${^2}$) of biofilm by multiplying the cover by the mean of all biofilm samples.
+
+
+
+```{r, warning = F, message = F, results = F, fig.width = 6, fig.height= 3, fig.align="center"}
+
+biomass2019
+
+site_number <- rep(1:11)
+quad_surveyed <- c(43, 53, 55, 56, 53, 62, 60, 55, 58, 55, 62)
+quads <- data.frame(site_number, quad_surveyed)
+
+## Calculate reach means of cover and biomass
+## Here, biomass is only the taxa I included in surveys (the thick biofilms)
+plant_type1 <- biomass2019%>% 
+  mutate(site_number = as.numeric(as.character(site_number)))%>%
+  filter(!is.na(site_number))%>%
+  filter(site_number %in% c(1:11))%>%
+  left_join(quads, by = "site_number")%>%
+  mutate(spec_type = ifelse(spec_code %in% c("ANAB", "PHOR", "GOMP"), "biofilm", spec_type))%>%
+  select(site_number, per_macrophyte, per_algae, river_mile, 
+         spec_type, biomass, per_cover, quad_surveyed)%>%
+  group_by(site_number, spec_type)%>%
+  summarize(
+    quads = mean(quad_surveyed),
+    mean_per_cover = sum(per_cover, na.rm = T)/quads,
+    mean_biomass_gms = (sum(biomass, na.rm = T)/quads) * (1/0.16),
+    river_mile = river_mile[1])
+
+mean_biofilm <- mean(biomass$biomass_per_m2[biomass$type == "biofilm"], na.rm = T)
+thick_biofilm_taxa <- plant_type1 %>% filter(spec_type == "biofilm")
+
+
+## Calculate biofilm cover and biomass, including thicker biofilms from above:
+## I summed the cover and biomass for thicker and normal biofilms:
+peri <- plant_type1%>% 
+  group_by(site_number)%>%
+  summarize(mean_per_cover = 100 - sum(mean_per_cover))%>%
+  mutate(mean_biomass_gms = (0.01 * mean_per_cover) * mean_biofilm)%>%
+  mutate(spec_type = "biofilm_thin")%>%
+  mutate(site_number = rep(1:11))%>%
+  bind_rows(thick_biofilm)%>%
+  group_by(site_number)%>%
+  summarize(mean_per_cover_total = sum(mean_per_cover),
+            mean_biomass_gms_total = sum(mean_biomass_gms))%>%
+  mutate(spec_type = "biofilm")
+
+## Replacing biomass and cover for biofilm with data in peri df above:
+plant_type2 <- plant_type1 %>%
+  left_join(peri, by = c("site_number", "spec_type"))%>%
+  mutate(Cover.mean = ifelse(spec_type =="biofilm", mean_per_cover_total, mean_per_cover))%>%
+  mutate(Biomass.mean = ifelse(spec_type =="biofilm", mean_biomass_gms_total, mean_biomass_gms))%>%
+  select(-mean_per_cover, -mean_biomass_gms, -mean_biomass_gms_total, -mean_per_cover_total )
+```
+
+<br>
+<br>
+
+
+
+
+
+### Reach level estimates of percent cover and mean reach biomass (AFDM g/m${^2}$)
+```{r, warning = F, message = F, results = F, fig.width = 6, fig.height= 3, fig.align="center"}
+
+plant_type2$spec_type  <- factor(plant_type2$spec_type, levels = c("biofilm", "algae", "macrophyte"))
+
+plant_type2 %>% gather(5:6, key = metric, value = value)%>%
+mutate(metric = factor(metric, levels = c("Cover.mean", "Biomass.mean")))%>%
+ggplot(aes(x=190*1.6 - river_mile*1.6, y = value, group = spec_type, fill = spec_type))+
+  geom_area(position = "stack")+
+  scale_x_continuous(expand= c(0.01,0.01), limits = c(17, 300))+
+  labs(y = "Value", x = "River km Below Iron Gate Dam")+
+  scale_y_continuous(expand= c(0.01,0.01))+
+  theme_classic()+
+  scale_fill_manual(values = c("grey80", "grey50", "grey20"))+
+  theme(legend.position = c(.88, .81),
+        legend.key.size = unit(0.35, 'cm'))+ #change legend key size)+
+  facet_wrap(~metric, scales = "free_y")
+
+#write.csv(plant_type2, "Data/final_data/bm_final_out.csv")
+```
+
+
+
+
+
+

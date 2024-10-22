@@ -1,0 +1,655 @@
+---
+title: "Explore HGAMs on the Klamath"
+author: "Laurel Genzoli"
+date: "2/22/2021"
+output:
+   html_document:
+    theme: united
+    highlight: tango
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{=html}
+<style type="text/css">
+body, td {font-size: 12px;}
+code.r{font-size: 8px;}
+pre {font-size: 10px}
+</style>
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = F, message = F)
+knitr::opts_knit$set(root.dir = '/Users/laurelgenzoli/Dropbox/2018-2022_PHD/2019_Klamath/For_GitHub')
+def.chunk.hook  <- knitr::knit_hooks$get("chunk")
+knitr::knit_hooks$set(chunk = function(x, options) {
+  x <- def.chunk.hook(x, options)
+  ifelse(options$size != "normalsize", paste0("\n \\", options$size,"\n\n", x, "\n\n \\normalsize"), x)
+})
+
+```
+
+### Packages and Data
+Read in metabolism and biomass data
+Plot density of GPP measurements at each site
+
+```{r, warning = F, echo = F,  fig.width = 7, fig.height = 4}
+setwd("/Users/laurelgenzoli/Dropbox/2018-2022_PHD/2019_Klamath/For_GitHub")
+
+library(tidyverse)
+library(mgcv)
+library(lubridate)
+library(gratia)
+library(tidymv)
+library(itsadug)
+library(ggpubr)
+library(cowplot)
+
+
+met <- read_csv("Data/final_data/Metab_for_hGAMs.csv")%>%
+  mutate(site = as.factor(site))
+sites <- c("I5", "TH", "WB", "BB", "RP", "SV", "HC", "OMR", "OR", "WE", "KAT")
+met$site <- factor(met$site, levels = sites)
+names(met)
+
+bm <- read_csv("Data/final_data/bm_final_out.csv")
+
+met %>%
+  ggplot(aes(x = GPP, col = site))+
+  geom_density(lwd = 1.2, alpha = 0.5)+
+  theme_classic()
+
+```
+
+## HGAM Structures:
+
+Below are the 4 structures presented in the Pederson HGAM paper. I explored all 4 structures to get a better grasp on the options, but number 2 is what I'm using. All other structures are set to eval = F to not take up time running this script.  
+
+### (1) Global for all observations
+
+This is varying intercept, fixed "slope" model. Not helpful for my purposes because I want to compare differences in the seasonal metabolism shapes among sits. This model give the same shape for every site, with a different "intercept" 
+
+```{r, echo = F, message = F, eval = F}
+met_modG <- gam(GPP~s(jday, k = 50, bs = "tp") + 
+                  s(site, k = 11, bs = "re"),
+    data = met, method = "REML", family = "gaussian")
+
+
+
+draw(met_modG)
+#gam.check(met_modG)
+appraise(met_modG)
+summary(met_modG)
+plot(predict.gam(met_modG), pch = 19, cex = 0.4)
+
+preds.G <- predict_gam(met_modG, values = as.list(pred.dat))%>%
+  select(-se.fit)%>%
+  rename(G.fit = fit)
+```
+
+### (2) A single common smoother plus group-level smoothers that have the same wiggliness (model GS)
+
+
+This is what I'm trying to do in terms of sharing the extent that the smoother can vary, but letting the data at each site drive the smoother at that sites. I run the model with k = 10 and 20 and compare the extent that choosing different levels of wiggiliness affect my outcomes later in the script.
+
+
+```{r, echo = F, message = F}
+met_modGS.gamma <- gam(GPP~s(jday, k = 20, m = 2) + 
+                  s(jday, site, bs = "fs", m =2),
+                data = met, method = "REML", family = Gamma(link= "log"))
+
+met_modGS.10 <- gam(GPP~s(jday, m = 2, k = 10) + 
+                  s(jday, site, k = 10, bs = "fs", m =2),
+                data = met, method = "REML", family = "gaussian")
+
+met_modGS.20 <- gam(GPP~s(jday, m = 2, k = 20) + 
+                  s(jday, site, k = 20, bs = "fs", m =2),
+                data = met, method = "REML", family = "gaussian")
+
+
+#AIC(met_modGS.gamma)
+#AIC(met_modGS.gaus)
+#met_modGS <- met_modGS.gaus
+
+draw(met_modGS.20)
+#gam.check(met_modGS)
+appraise(met_modGS.20)
+summary(met_modGS.20)
+
+
+
+preds.GS2 <- predict_gam(met_modGS.20, values = list(jday = c(170:273)))%>%
+  select(-se.fit)%>%
+  rename(GS2.fit = fit)
+
+#fd_GS2 <- derivatives(met_modGS.20, term = "site", partial_match = T)%>%
+ # filter(data > 170 & data < 172)
+
+
+preds.GS1 <- predict_gam(met_modGS.10, values = list(jday = c(170:273)))%>%
+  select(-se.fit)%>%
+  rename(GS1.fit = fit)
+fd_GS1 <- derivatives(met_modGS.10, term = "site", partial_match = T)
+
+
+```
+
+
+### ER (model GS) & make the metabolism DF!
+
+Use same model structure for ER as GPP
+This is what I will need to save as a final df for figures!
+
+```{r, echo = F, message = F}
+met_modGS.20.ER <- gam(ER~s(jday, m = 2, k = 20) + 
+                  s(jday, site, k = 20, bs = "fs", m =2),
+                data = met, method = "REML", family = "gaussian")
+
+draw(met_modGS.20.ER)
+appraise(met_modGS.20.ER)
+summary(met_modGS.20.ER)
+
+
+preds.GS2.ER <- predict_gam(met_modGS.20.ER, values = list(jday = c(170:273)))%>%
+  select(-se.fit)%>%
+  rename(gam.ER = fit)
+fd_GS2.ER <- derivatives(met_modGS.20.ER, term = "site", partial_match = T)
+```
+
+### Make the metabolism DF!
+This is what I will need to save as a final df for figures (at bottom of script)! This is using the k = 20 basis. This feels out of place in the script, but I made the decisions to finalize this df based on analysis below. 
+
+```{r, message = F}
+
+met.to.bind <- met %>% select(date, K600.daily, K600.daily, K600.daily.lower, K600.daily.upper, site, year, jday, z, GPP, ER, GPP.upper, ER.upper, GPP.lower, ER.lower, NEP, Flow, site.no)
+
+rename.gam.gpp <- preds.GS2 %>% rename(gam.GPP = GS2.fit)
+
+metab.final <- preds.GS2.ER %>%
+  left_join(rename.gam.gpp, by = c("site", "jday"))%>%
+  mutate(gam.NEP = gam.ER + gam.GPP)%>%
+  left_join(met.to.bind, by = c("site", "jday"))%>%
+  mutate(gam.GPP = ifelse(site == "OMR" & jday < 171, NA, gam.GPP))%>%
+  mutate(gam.GPP = ifelse(site == "OR" & jday < 177, NA, gam.GPP))%>%
+  mutate(gam.ER = ifelse(site == "OR" & jday < 177, NA, gam.ER))
+
+```
+
+
+
+
+### (3) A single common smoother plus group-level smoothers with differing wiggliness (Model GI)
+
+I specifically want the wiggles to be the same among sites, so this isn't a canidate!  "This model class is very similar to model GS, but we now allow each group-specific smoother to have its own smoothing parameter and hence its own level of wiggliness."
+
+```{r, echo = F, message = F, eval = F}
+met_modGI <- gam(GPP~s(jday, m = 2, bs = "tp", k = 20) + 
+                   s(jday, by = site, bs = "tp", m =1) +
+                   s(site, bs = "re", k = 11),
+                 data = met, method = "REML")
+
+draw(met_modGI)
+#gam.check(met_modGI)
+appraise(met_modGI)
+summary(met_modGI)
+plot(predict.gam(met_modGI), pch = 19, cex = 0.4)
+
+preds.GI <- predict_gam(met_modGI, values = as.list(pred.dat))%>%
+  select(-se.fit)%>%
+  rename(GI.fit = fit)
+```
+
+### (4) Models without global smoothers (model S)
+
+"When we don't model the global term, we are allowing each group to be differently shaped without restriction." **I think that if I didn't have missing data, this would be best, but I want to share information from other sites to help with missing data issues.
+
+```{r, echo = F, message = F, eval = F}
+met_modS <- gam(GPP ~ s(jday, site,  k = 20, bs = "fs", m = 2),
+                 data = met, method = "REML")
+
+draw(met_modS)
+#gam.check(met_modGI)
+appraise(met_modS)
+summary(met_modS)
+plot(predict.gam(met_modS), pch = 19, cex = 0.4)
+fd_S <- derivatives(met_modS, term = "site", partial_match = T)
+
+preds.S <- predict_gam(met_modS, values = as.list(pred.dat))%>%
+  select(-se.fit)%>%
+  rename(S.fit = fit)
+```
+
+
+### Compare all 4 models:
+
+I don't need to run all of these models because I know that model GS is the strucutre I want. Now I need to just compare specifications for that model.
+
+```{r, warning = F, eval = F, echo = F,  fig.width = 10, fig.height = 8}
+mp <- met %>% 
+left_join(preds.G, by = c("jday", "site"))%>%
+left_join(preds.GS, by = c("jday", "site"))%>%
+left_join(preds.GI, by = c("jday", "site"))%>%
+left_join(preds.S, by = c("jday", "site"))
+
+mp%>% 
+ggplot(aes(x = jday, y = GPP))+
+geom_point(size = 0.3)+
+geom_hline(yintercept = 0, lty = 2, lwd = 0.5)+
+geom_line(data = mp, aes(x = jday, y = G.fit), col = "grey60", lwd = 1, alpha = 0.6)+
+geom_line(data = mp, aes(x = jday, y = GS.fit), col = "red", lwd = 1, alpha = 0.6)+
+
+geom_line(data = mp, aes(x = jday, y = S.fit), col = "purple", lwd = 1, alpha = 0.6)+
+  geom_line(data = mp, aes(x = jday, y = GI.fit), col = "cyan4", lwd = 1, alpha = 0.6)+
+facet_wrap(~site)+
+theme_classic()
+```
+
+### Compare Model GS with k = 20 vs. 10:
+
+There is an obvious difference in how smoothed the data set is. I'll try params for both, and see how different the results are.
+
+```{r, warning = F, echo = F,  fig.width = 10, fig.height = 8}
+met.compare <- preds.GS2 %>% 
+left_join(met, by = c("jday", "site"))%>%
+left_join(preds.GS1, by = c("jday", "site"))
+
+met.compare%>% 
+ggplot(aes(x = jday, y = GPP))+
+geom_point(size = 0.3)+
+geom_hline(yintercept = 0, lty = 2, lwd = 0.5)+
+geom_line(data = met.compare, aes(x = jday, y = GS2.fit), col = "cyan4", lwd = 1.5, alpha = 0.8)+
+geom_line(data = met.compare, aes(x = jday, y = GS1.fit), col = "red", lwd = 0.8, alpha = 0.8)+
+facet_wrap(~site)+
+theme_classic()
+```
+
+
+### Pull out seasonal stats:
+  - green.up = steepest increase indicated by largest derivative
+    - jday is included in this df
+  - max.gpp = max of the smoother 
+  - max.gpp.day = jday when max occurred 
+  - mean.gpp = mean gpp of the smoother 
+
+Here, I pulled out stats with both smothers (10 and 20) to make sure that they give me similar answers; one df for the 10 model, and another with the 10 and 20 both in it for plotting below.
+
+
+```{r, warning = F}
+
+fd_GS.1 <- derivatives(met_modGS.10, term = "site", partial_match = T)%>%
+  select(site, jday, .derivative) %>%
+rename(derivative = .derivative)
+
+fd_GS.2 <- derivatives(met_modGS.20, term = "site", partial_match = T)%>%
+select(site, jday, .derivative) %>%
+rename(derivative = .derivative)
+
+
+
+## max green up and day
+green.up <- fd_GS.1 %>% 
+group_by(site)%>%
+filter(derivative == max(derivative))%>%
+mutate(green.up.day = as.numeric(round(jday)))%>%
+select(-jday)%>%
+rename(green.up = "derivative")%>%
+pivot_longer(2:3, names_to = "stat", values_to = "value")
+
+green.up2 <- fd_GS.2 %>% 
+group_by(site)%>%
+filter(derivative == max(derivative))%>%
+mutate(green.up.day = as.numeric(round(jday)))%>%
+select(-jday)%>%
+rename(green.up = "derivative")%>%
+pivot_longer(2:3, names_to = "stat", values_to = "value")%>%
+  left_join(green.up, by = c("site", "stat"))
+
+## max gpp (use max of the GAM) 
+max.gpp <- preds.GS1 %>%
+  group_by(site)%>%
+  summarize(value = max(GS1.fit))%>%
+  mutate(stat = "max.gpp")
+
+max.gpp2 <- preds.GS2 %>%
+  group_by(site)%>%
+  summarize(value = max(GS2.fit))%>%
+  mutate(stat = "max.gpp")%>%
+  left_join(max.gpp, by = c("site", "stat"))
+
+## day of max gpp
+max.gpp.day <- preds.GS1 %>% 
+  rename(value = "GS1.fit")%>%
+  left_join(max.gpp, by = c("site", "value"))%>%
+  filter(stat == "max.gpp")%>%
+  select(jday, site)%>%
+  mutate(stat = "max.gpp.day")%>%
+  rename(value = jday)
+
+mg2<-  max.gpp2%>% select (-value.y)
+ max.gpp.day2 <- preds.GS2 %>% 
+  rename("value.x" = "GS2.fit")%>%
+  left_join(mg2, by = c("site", "value.x"))%>%
+  filter(stat == "max.gpp")%>%
+  select(jday, site)%>%
+  mutate(stat = "max.gpp.day")%>%
+  rename(value = jday)%>%
+  left_join(max.gpp.day, by = c("site", "stat"))
+  
+## gpp mean (use mean of the gam)
+  mean.gpp <- preds.GS1 %>% 
+  rename(value = "GS1.fit")%>%
+  group_by(site)%>%
+  summarize(value = mean(value))%>%
+  mutate(stat = "mean.gpp")
+
+  mean.gpp2 <- preds.GS2 %>% 
+  rename(value = "GS2.fit")%>%
+  group_by(site)%>%
+  summarize(value = mean(value))%>%
+  mutate(stat = "mean.gpp") %>%
+  left_join(mean.gpp, by = c("site", "stat"))
+``` 
+  
+  
+### Pull out stats using the k=20 basis.
+
+This is trying to look at the derivative issues; the dirivative from the HGAM was not choosing what looked like the steepest incline!
+
+
+```{r, warning = F, eval = T}
+
+fd_GS.2 <- derivatives(met_modGS.20, term = "site", partial_match = T)%>%
+select(site, jday, .derivative) %>%
+rename(derivative = .derivative) %>%
+  filter(jday > 173 & jday < 273)%>%
+  mutate(derivative = ifelse(site == "OR" & jday < 190, NA, derivative))%>%
+  mutate(derivative = ifelse(site == "OR" & jday > 250, NA, derivative))
+
+
+###########
+## take the limit? how to parameterize the derivative
+## this is not right; not working to ID max green up
+
+
+fd_GS.2 <- derivatives(met_modGS.20, type = "central")%>%
+select(site, jday, .derivative) %>%
+rename(derivative = .derivative) %>%
+  filter(jday > 173 & jday < 273)%>%
+  mutate(derivative = ifelse(site == "OR" & jday < 180, NA, derivative))%>%
+  mutate(derivative = ifelse(site == "OR" & jday > 265, NA, derivative))
+
+ggplot(fd_GS.2 ,aes(x = jday, y = derivative * 10))+
+  geom_line()+
+  #geom_line(aes(x = jday, y = .lower*10), col = "grey", lwd = 0.5)+
+  #geom_line(aes(x = jday, y = .upper*10),  col = "grey", lwd = 0.5)+
+  #geom_line(data = met.final, aes(x = jday, y = gam.GPP), col = "cyan4", alpha = 0.5, lwd = 2)+
+  facet_wrap(~site)+
+  geom_hline(yintercept = 0, lty = 2)+
+  scale_y_continuous(limits = c(-3.5, 20))
+```
+
+### Pull out stats using the k=20 basis; new method for green-up.
+
+This creates a simple data frame with stats for just one GAM model. This should be modified for the final model wiggliness.
+
+I did a second method of figuring out the max green up bc the GAM deriviative was not working. Here, I used the maximum 1-day increase in gpp (from the GAM). 
+
+
+```{r, warning = F}
+
+### Max green-up with rate of change between days method:
+### Do what bob suggested: take the diff and plot. ID max diff of GAM
+
+max.green.up.2.new <- preds.GS2 %>%
+  group_by(site)%>%
+  mutate(gr.up.df = c(NA, diff(GS2.fit)))%>%
+  summarize(value = max(gr.up.df, na.rm = T))%>%
+  mutate(stat = "max.gpp.2.new")
+
+max.green.up.2.new.day <- preds.GS2 %>%
+  group_by(site)%>%
+  mutate(value = c(NA, diff(GS2.fit)))%>%
+  left_join(max.green.up.2.new, by = c("site", "value"))%>%
+  filter(stat == "max.gpp.2.new")%>%
+  select(jday, site, value)%>%
+  mutate(jday = as.numeric(jday))%>%
+  rename(max.green.up.2.new = value, max.green.up.2.new.day = jday)%>%
+  pivot_longer(c(1, 3), names_to = "stat", values_to = "value")
+  
+
+## max green up and day (this method will be discarded)
+green.up20 <- fd_GS.2 %>% 
+group_by(site)%>%
+filter(derivative == max(derivative, na.rm=T))%>%
+mutate(green.up.day = as.numeric(round(jday)))%>%
+select(-jday)%>%
+rename(green.up = "derivative")%>%
+pivot_longer(2:3, names_to = "stat", values_to = "value")
+
+green.up20
+
+## max GPP (use max of the GAM) 
+max.gpp20 <- preds.GS2 %>%
+  group_by(site)%>%
+  summarize(value = max(GS2.fit))%>%
+  mutate(stat = "max.gpp")
+
+
+## day of max gpp
+max.gpp.day20 <- preds.GS2 %>% 
+  rename(value = "GS2.fit")%>%
+  left_join(max.gpp20, by = c("site", "value"))%>%
+  filter(stat == "max.gpp")%>%
+  select(jday, site)%>%
+  mutate(stat = "max.gpp.day")%>%
+  rename(value = jday)
+  
+## gpp mean (use mean of the gam)
+  mean.gpp20 <- preds.GS2 %>% 
+  rename(value = "GS2.fit")%>%
+  group_by(site)%>%
+  summarize(value = mean(value))%>%
+  mutate(stat = "mean.gpp")
+
+  
+## make this data frame look just like the old one. 
+## just do it so that the rest of the code runs smooth.
+
+gpp.stats.20 <- bind_rows(max.gpp20, mean.gpp20, max.gpp.day20, max.green.up.2.new.day)
+
+```
+
+### This plot shows how the derivative is not aligned with the newer method for greenup. Sticking with method I understand (the difference, not derivative)
+
+```{r, warning = F, echo = F,  fig.width = 10, fig.height = 8, eval = T}
+gr.up <- green.up20%>%
+  filter(stat == "green.up.day")%>%
+  select(site, value)%>%
+  rename(jday = "value")
+
+### new code green up: 
+gr.up.2 <- max.green.up.2.new.day%>%
+  filter(stat == "max.green.up.2.new.day")%>%
+  select(site, value)%>%
+  rename(jday = value)
+
+
+
+preds.GS2%>%
+rename(GPP = GS2.fit)%>%
+ggplot(aes(x = jday, y = GPP))+
+geom_line(col = "cyan4", lwd = 1.5, alpha = 0.6)+
+facet_wrap(~site, nrow = 3)+
+#geom_text(aes(y = GPP, x = jday, label = site), data = site.lab, vjust = 1, size = 3)+
+geom_segment(data = gr.up.2, aes(x = jday, y = 10, xend = jday, yend = 1),     arrow = arrow(length = unit(0.2, "cm")), col = "green", lwd = 0.8, alpha = 0.9)+
+geom_segment(data = gr.up, aes(x = jday, y = 10, xend = jday, yend = 1),     arrow = arrow(length = unit(0.2, "cm")), col = "#FBB91FFF", lwd = 0.8, alpha = 0.9)
+
+
+
+
+
+
+```   
+  
+
+
+
+
+### ER and NEP Stats:
+
+From the gams, and for NEP, calcuated from the GA data.
+
+```{r, warning = F}   
+## er mean (use mean of the gam)
+  mean.er <- metab.final%>% 
+  select(jday, site, gam.ER)%>%
+  group_by(site)%>%
+  summarize(value = mean(gam.ER, na.rm = T))%>%
+  mutate(stat = "mean.er")
+
+  mean.nep <- metab.final%>% 
+  select(jday, site, gam.NEP)%>%
+  group_by(site)%>%
+  summarize(value = mean(gam.NEP, na.rm =T))%>%
+  mutate(stat = "mean.nep")
+
+gpp.sum.er.nep <- bind_rows(gpp.stats.20, mean.er, mean.nep)
+
+```
+
+  
+### Variation Stats:
+These are on the raw GPP data because the GAM smooths out the variation.
+  - CV
+  - RBI
+    - Baker, D.B., R.P. Richards, T.T. Loftus, and J.W. Kramer. 2004. A New Flashiness Index: Characteristics and Applications to Midwestern Rivers and Streams. April 2004. Journal of the American Water Resources Association (JAWRA). Pages 503:522. 
+
+
+```{r, warning = F}   
+## 1: CV = sd/mean, use raw GPP
+  
+cv.gpp <- met %>% 
+  group_by(site)%>%
+  summarize(value = (sd(GPP, na.rm = T))/(mean(GPP, na.rm = T)))%>%
+  mutate(stat = "cv.gpp")
+
+## RBI flashiness index
+
+RBI <- function(GPP){
+abs.values <- c()
+  for (i in 2:length(GPP)){
+    
+  abs.values[i] <- abs(GPP[i-1]-GPP[i])
+  rbi <- sum(abs.values, na.rm = T)/sum(GPP, na.rm = T)}
+  
+return(rbi)
+}
+
+rbi.gpp <- met %>% 
+  group_by(site)%>%
+  summarize(value = RBI(GPP = GPP))%>%
+  mutate(stat = "rbi.gpp")
+
+gpp.sum.20 <- bind_rows(gpp.sum.er.nep, cv.gpp, rbi.gpp)
+```
+
+
+
+
+
+
+### Bind data frames and visualize. 
+ Comparing the two model wiggliness parameters, compbine the biomass data so that I can plot the two options and assess if this choice would make a difference in my conclusions.
+ 
+The differences between the 10 and 20 basis is very minimal and does not change the outcome of the relationships.
+
+
+```{r, warning = F, echo = F,  fig.width = 8, fig.height = 4.5}
+
+site <- c("I5", "TH", "WB", "BB", "RP", "SV", "HC", "OMR", "OR", "WE", "KAT")
+site.no <- rep(1:11, 1)
+site.nos <- data.frame(site, site.no)
+
+biom <- bm %>% filter(spec_type == "macrophyte")%>%
+  select(site_number, Biomass.mean)%>%
+  rename(site.no = site_number)%>%
+  left_join(site.nos, by = "site.no")
+
+bind_rows(green.up2,
+                     max.gpp.day2, 
+                     max.gpp2,
+                     mean.gpp2)%>%
+  left_join(biom, by = "site")%>%
+  select(stat, value.x, value.y, Biomass.mean)%>%
+  pivot_longer(3:4, names_to = "try", values_to = "value")%>%
+  ggplot(aes(x = Biomass.mean, y = value, col = try))+
+  geom_point()+
+  facet_wrap(~stat, ncol = 2, scales = "free")+
+  stat_smooth(method = "lm")+
+  theme_classic()
+```
+
+
+### Combine all stats and plot for 10 and 20
+Correlation coefficients only print when I remove the col=site
+
+```{r, warning = F, echo = F,  fig.width = 10, fig.height = 4.5}
+p.10 <- bind_rows(green.up, 
+                     max.gpp.day, 
+                     max.gpp,
+                     mean.gpp,
+                     cv.gpp,
+                     rbi.gpp)%>%
+  left_join(biom, by = "site")%>%
+  ggplot(aes(x = Biomass.mean, y = value))+
+  geom_point()+
+  facet_wrap(~stat, ncol = 3, scales = "free")+
+  theme_classic()+
+  stat_cor(r.accuracy = 0.01, method = "pearson", aes(label = after_stat(r.label)), label.y.npc="top", label.x.npc = 0.3, fontface = "bold")
+
+
+p.20 <-gpp.sum.20%>%
+  left_join(biom, by = "site")%>%
+  ggplot(aes(x = Biomass.mean, y = value))+
+  geom_point()+
+  facet_wrap(~stat, ncol = 3, scales = "free")+
+  theme_classic()+
+  stat_cor(r.accuracy = 0.01, method = "pearson", aes(label = after_stat(r.label)), label.y.npc="top", label.x.npc = 0.3, fontface = "bold")
+
+plot_grid(p.10, p.20)
+
+unique(gpp.sum.20$stat)
+
+gpp.sum.20 <- gpp.sum.20%>%
+  mutate(stat = ifelse(stat == "max.green.up.2.new", "green.up",
+                       ifelse(stat == "max.green.up.2.new.day", "green.up.day", stat)))
+  
+```
+
+
+
+## Write final data sets to files
+```{r, warning = F, eval = T}
+#write_csv(gpp.sum.20, "Data/final_data/metab_sum.csv")
+#write_csv(metab.final, "Data/final_data/metab_hgam.csv")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

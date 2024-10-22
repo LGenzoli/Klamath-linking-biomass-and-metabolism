@@ -1,0 +1,800 @@
+---
+title: '2019 Klamath Metabolism'
+author: "Laurel Genzoli"
+date: "2023-08-24"
+output:
+   html_document:
+    theme: united
+    highlight: tango
+editor_options: 
+  markdown: 
+    wrap: 72
+  chunk_output_type: console
+---
+
+```{=html}
+<style type="text/css">
+body, td {font-size: 12px;}
+code.r{font-size: 8px;}
+pre {font-size: 10px}
+</style>
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = F, message = F)
+knitr::opts_knit$set(root.dir = '/Users/laurelgenzoli/Dropbox/2018-2022_PHD/2019_Klamath/For_GitHub')
+def.chunk.hook  <- knitr::knit_hooks$get("chunk")
+knitr::knit_hooks$set(chunk = function(x, options) {
+  x <- def.chunk.hook(x, options)
+  ifelse(options$size != "normalsize", paste0("\n \\", options$size,"\n\n", x, "\n\n \\normalsize"), x)
+})
+
+```
+## Script Overview:
+
+This script does the following to pull together my final metabolism data to use in the analysis:
+
+1) creates relationship between reach depth and discharge to scale metabolism with.
+2) create a data frame of metabolism with all sites, with GPP, ER, and NEP scaled to depth
+3) Look at some model diagnostics for metabolism
+4) Explore reach lengths for sites
+5) Extract site characteristics for a table and SI plot
+
+
+### Packages
+setwd('/Users/laurelgenzoli/Dropbox/2018-2022_PHD/2019_Klamath/For_GitHub')
+
+```{r, echo = F, message = F}
+setwd('/Users/laurelgenzoli/Dropbox/2018-2022_PHD/2019_Klamath/For_GitHub')
+
+library(tidyverse)
+library(lubridate)
+library(dataRetrieval)
+library(viridis)
+library(cowplot)
+library(fs)
+library(purrr)
+```
+
+
+
+## 1) Depth and Discharge
+
+The first section of this script deals with depth data for use in scaling my metabolism estimates to mean reach depth. I pull in flow data from the Perry model, and depths from the BOR data to make rating curves that I can use to scale metabolism to depth at each site for a given day.
+
+### Flow data from Perry model:
+
+```{r, warning=F, size = 'small', echo=FALSE}
+
+all.flows <- read_csv("Data/flow_interp.csv")%>%
+  mutate(year = year(Date))%>%
+  mutate(site_code = ifelse(Location == "Klamath Cottonwood", "I5",
+                     ifelse(Location == "Klamath Shasta", "TH",
+                     ifelse(Location == "Klamath Beaver", "WB",
+                     ifelse(Location == "Klamath Dona", "BB",
+                     ifelse(Location == "Klamath Scott", "RP",
+                     ifelse(Location == "Klamath Near Seiad Valley", "SV",
+                     ifelse(Location == "Klamath Indian Creek", "HC",
+                     ifelse(Location == "Klamath Clear", "OMR",
+                     ifelse(Location == "Klamath At Orleans", "OR",
+                     ifelse(Location == "Klamath Bluff", "WE",
+                     ifelse(Location == "Klamath Near Klamath", "KAT", "none"
+                            ))))))))))))%>%
+  select(Date, Flow, site_code, year)%>%
+  rename(date = Date)%>%
+  mutate(Flow = ifelse(site_code == "WE" & Flow == 966, 1957, Flow))
+
+## these are from all 4 years of surveys:
+flows <- all.flows %>% filter(year %in% c(2019:2022))
+
+dates <- read_csv("Data/Klamath_veg_date.csv")%>%
+  select(date, site_code, year)%>%
+  group_by(date)%>%
+  slice(1)
+  
+depths <- read_csv("Data/Klamath_veg_depths.csv")%>%
+  left_join(dates, by = c("year", "site_code"))%>%
+  select(year, mean_z, site_code, date)%>%
+  mutate(site_code = ifelse(site_code == "ABC", "WB", site_code))%>%
+  left_join(flows, by = c("date", "site_code", "year"))
+
+dwv <- read_csv("Data/Klamath_veg_date.csv")%>%
+  filter(year == 2019)%>%
+  select(date, site_code, transect, width, depth, river_mile)%>%
+  group_by(site_code, transect)%>%
+  slice(1)
+
+```
+
+### Summer 2019 flows
+
+These are plots based on the USGS Perry flow model. I merged the flow with the closest upstream point. For one day at WE, there was a weird low flow due to the model not accounting for travel time offsets; here I did a hand-calculated linear interpolation for flow (in code above, this is just the plot).
+
+```{r, warning = F, echo = F,  fig.width = 6, fig.height = 4.5, fig.align = "center"}
+
+all.flows %>% filter(year == "2019")%>%
+  filter(site_code != "none")%>%
+  mutate(jday = yday(date))%>%
+  filter(jday %in% c(166:274))%>%
+ggplot(aes(x = date, y = Flow, col = site_code))+
+  geom_line()+
+  theme_classic()
+
+```
+
+
+
+### Depth data from flow model
+
+Data from Nate Bradely, BOR. I used data for bed and WSE profiles using the high density mesh. 
+
+I calculated quantiles of the discharge from the period of record used by Bradely (1988-2019) to estimate exceedance flows at my 11 sites (from the Perry Flow Model).
+
+I calculated mean depths at each reach for a 3, 6, and 9 mile section by subtracting Bed from WSE at each point in the defined reach for each exceedance probability. I plotted the rating curves below, and extracted data for bob to build a multi-level model for the rating curves. 
+
+
+BSE/WSE is all in feet.
+
+```{r, warning = F, echo = F,  fig.width = 8, fig.height = 6}
+
+site <- c("I5", "TH", "WB", "BB", "RP", "SV", "HC", "OMR", "OR", "WE", "KAT")
+site.no <- rep(1:11, 1)
+site.nos <- data.frame(site, site.no)
+
+rc.flows <- all.flows %>% filter(year %in% c(1988:2019))%>%
+  filter(site_code != "none")%>%
+  group_by(site_code)%>%
+  summarize("75" = quantile(Flow, 0.25),
+            "50" = quantile(Flow, 0.5),
+            "25" = quantile(Flow, 0.75),
+            "10" = quantile(Flow, 0.90))%>%
+  pivot_longer(2:5, names_to= "ex.prob", values_to = "flow")%>%
+  rename(site = "site_code")%>%
+  left_join(site.nos, by = "site")
+
+## get river miles:
+rm <- read.csv("Data/final_data/bm_final_out.csv")%>%
+  select(site_number, river_mile)%>%
+  distinct()%>%
+  rename(rm_down = river_mile)
+
+
+
+## biomass:
+bm <- read_csv("Data/final_data/bm_final_out.csv")%>%
+select(site_number, spec_type, river_mile, Biomass.mean)%>%
+rename(site.no = site_number)%>%
+left_join(site.nos, by = "site.no")%>%
+filter(spec_type %in% c("algae", "macrophyte"))%>%
+pivot_wider(names_from= spec_type, values_from = Biomass.mean)
+
+## read in WSEs
+ WSE <- dir_ls("Data/LongProfiles/LongProfiles/DenseMesh/use_for_metab_sites")%>%
+  map_dfr(read.table, .id = "source", header = T, sep = ",")%>%
+  mutate(ex.prob = substr(source, 62, 63))%>%
+  mutate(el.type = substr(source, 92, 93))%>%
+  mutate(el.type = case_when(el.type %in% c( "Be", "_B") ~"Bed",
+                               el.type %in% c("WS", "_W") ~ "WSE"))%>%
+  select(-source)%>%
+  filter(el.type == "WSE")%>%
+  rename(WSE = "el.type")%>%
+  rename(WSE.el = "Elevation")
+
+## Read in Bed elev. and join with WSE to calc depth 
+z <- dir_ls("Data/LongProfiles/LongProfiles/DenseMesh/use_for_metab_sites")%>%
+  map_dfr(read.table, .id = "source", header = T, sep = ",")%>%
+  mutate(ex.prob = substr(source, 62, 63))%>%
+  mutate(el.type = substr(source, 92, 93))%>%
+  mutate(el.type = ifelse(el.type %in% c("Be", "_B"), "Bed", "WSE"))%>%
+  select(-source)%>%
+  filter(el.type == "Bed")%>%
+  rename(Bed = "el.type")%>%
+  rename(Bed.el = "Elevation")%>%
+  left_join(WSE, by = c("Station", "ex.prob"))
+
+
+
+
+## calc depth for each of 3 reach lengths
+
+rm3 <- rm %>% mutate(rm_up = rm_down + 3)
+
+test.3 <- z %>% 
+  mutate(site = ifelse(Station > rm3$rm_down & Station < rm3$rm_up, rm3$site_number, NA))%>%
+  filter(!is.na(site))%>%
+  mutate(z = WSE.el - Bed.el)%>%
+  mutate(reach = 3)
+
+rm6 <- rm %>% mutate(rm_up = rm_down + 6)
+
+test.6 <- z %>% 
+  mutate(site = ifelse(Station > rm6$rm_down & Station < rm6$rm_up,     rm6$site_number, NA))%>%
+  filter(!is.na(site))%>%
+  mutate(z = WSE.el - Bed.el)%>%
+  mutate(reach = 6)
+
+
+rm9 <- rm %>% mutate(rm_up = rm_down + 9)
+
+test.9 <- z %>% 
+  mutate(site = ifelse(Station > rm9$rm_down & Station < rm9$rm_up, rm9$site_number, NA))%>%
+  filter(!is.na(site))%>%
+  mutate(z = WSE.el - Bed.el)%>%
+  mutate(reach = 9)
+
+test.z <- bind_rows(test.3, test.6, test.9)%>%
+  mutate(reach = as.factor(reach))%>%
+  rename(site.no = "site")
+
+
+ggplot(test.z, aes(x = z, col = reach))+
+  geom_density()+
+  facet_wrap(~site.no)+
+  theme_classic()+
+  geom_vline(xintercept = 5)
+
+
+## plot for SI:
+
+test.z %>% 
+  mutate(z.m = z/3.281)%>%
+  mutate(Reach.length = ifelse(reach == 3, 5, 
+                        ifelse(reach == 6, 10, 15)))%>%
+  mutate(Reach.L = as.factor(Reach.length))%>%
+ggplot(aes(x = z.m, col = Reach.L))+
+  geom_density(lwd = 0.8, alpha = 0.7)+
+  facet_wrap(~site.no)+
+  theme_classic()+
+  ylab("Density")+
+  xlab("z (m)")+
+  theme(legend.position = c(0.9, 0.12))
+
+
+## data file for bob to make rating curves usng multi-level model
+## this is in cfs and feet still
+depths.for.bob <- test.z %>% filter(reach == 6)%>%
+    left_join(rc.flows, by = c("site.no", "ex.prob"))%>%
+    select(Station, ex.prob, site.no, z, site, flow)%>%
+    mutate(logZ = log(z))%>%
+    mutate(logQ = log(flow))
+
+depths.for.bob %>%
+  filter(ex.prob == 10)%>%
+  count(site.no)
+
+
+  
+comp <- test.z %>% group_by(site.no, ex.prob, reach)%>%
+    summarize(mean_z = mean(z, na.rm = T))%>%
+    left_join(rc.flows, by = c("site.no", "ex.prob"))%>%
+   mutate(z.m = mean_z/3.281)%>%
+  mutate(cms = flow/35.3146)
+    
+
+sq <- comp %>% filter(reach == 6)%>%
+  ggplot(aes(x = cms, y = z.m))+
+    geom_point()+
+    facet_wrap(~site.no, nrow = 3, scales = "free")+
+    theme_classic()+
+    theme(legend.position = c(0.85, 0.1))+
+    scale_x_log10()+
+    scale_y_log10()+
+    stat_smooth(method = "lm", se = F)+
+    xlab("Discharge (cms)")+
+    ylab("Mean z (m)")
+
+
+sq
+
+
+## data for bob to make rating curves via mean of depth at each reach
+comp_bob <- comp%>% 
+  filter(reach == "6")%>%
+  mutate(logQ = log(flow))%>%
+  mutate(logZ = log(mean_z))%>%
+  ungroup()%>%
+  select(site, logQ, logZ)
+
+#write_csv(comp_bob, "Data/LongProfiles/r_curves_out.csv")  
+
+## Coefficients for rating curves are for cfs and feet!!!
+
+```
+
+
+
+
+## Combine metabolism files:
+
+
+### Read in metabolism data:
+Extract metabolism data in a different script. I extracted parameter files, and the .rds so that I can do model diagnostics on them.
+
+This file has the new SV run in it, and has excluded HC ER data from biofouled dates. Also exclude ER&GPP from OR for 167-171 when DO was supersaturated (GPP looks weirdly high here in addition to ER > 0)
+
+I need to update metabolism using depth relationships!!
+  - Calc. GPP, ER, NEP based on updated depth estimates
+
+The file: z_site_intercept_out.csv (in the LongProfiles folder) has the coefficients to scale mean reach depth to discharge. Bob modeled this in a separate script. 
+
+Plots here show difference between using single depth estimate for the whole summer vs. scaling GPP to depth based on flow each day. 
+
+```{r, warning = F, echo = F,  fig.width = 8, fig.height = 5, fig.align = "center"}
+
+## UPDATE DEPTHS: these are my field measurements; I replaced with model data below:
+ z <- depths %>% group_by(site_code)%>%
+  summarise(z = mean(mean_z, na.rm = T))%>%
+  rename(site = "site_code")
+
+q <- flows %>% select(site_code, date, Flow)%>%
+  rename(site = "site_code")
+  
+
+site <- c("I5", "TH", "WB", "BB", "RP", "SV", "HC", "OMR", "OR", "WE", "KAT")
+site.no <- rep(1:11, 1)
+s.no <- data.frame(site, site.no)
+
+## these are from bob's model:
+z.site.intercept <- read_csv("Data/LongProfiles/z_site_intercept_out.csv")
+
+
+
+met <- dir_ls("Data/final_metab_params")%>%
+  map_dfr(read_csv, .id = "source")%>%
+  mutate(site = substr(source, 25, 26))%>%
+  mutate(site = replace(site, site == "ka", "KAT"))%>%
+  mutate(site = replace(site, site == "ab", "WB"))%>%
+  mutate(site = replace(site, site == "om", "OMR"))%>%
+  mutate(site = replace(site, site == "i5", "I5"))%>%
+  mutate(site = replace(site, site == "th", "TH"))%>%
+  mutate(site = replace(site, site == "bb", "BB"))%>%
+  mutate(site = replace(site, site == "rp", "RP"))%>%
+  mutate(site = replace(site, site == "sv", "SV"))%>%
+  mutate(site = replace(site, site == "hc", "HC"))%>%
+  mutate(site = replace(site, site == "or", "OR"))%>%
+  mutate(site = replace(site, site == "we", "WE"))%>%
+  select(-1)%>%
+  mutate(year = year(date))%>%
+  mutate(jday = yday(date))%>%
+  left_join(q, by = c("site", "date"))%>%
+  left_join(s.no, by = "site")%>%
+  left_join(z.site.intercept, by = "site")%>%
+  mutate(depth.ft = exp(-1.04 + site.Estimate.Intercept + log(Flow) * 0.36))%>%
+  mutate(depth.m = depth.ft/3.28)%>%
+  left_join(z, by = "site")%>%  ### UPDATE DEPTHS (above, this is old data for compare)
+  mutate(GPP.worse = GPP.daily * z)%>%
+  mutate(GPP = GPP.daily * depth.m)%>%
+  mutate(ER = ER.daily * depth.m) %>%
+  mutate(GPP.upper = GPP.daily.upper * depth.m)%>%
+  mutate(ER.upper = ER.daily.upper * depth.m) %>%
+  mutate(GPP.lower = GPP.daily.lower * depth.m)%>%
+  mutate(ER.lower = ER.daily.lower * depth.m) %>%
+  mutate(ER = ifelse(site == "HC" & jday %in% c(215:240), NA, ER))%>%
+  mutate(GPP = ifelse(site == "HC" & jday %in% c(215:240), NA, GPP))%>%
+  mutate(ER = ifelse(site == "OR" & jday %in% c(167:171), NA, ER))%>%
+  mutate(GPP = ifelse(site == "OR" & jday %in% c(167:171), NA, GPP))%>%
+  mutate(ER.upper = ifelse(site == "HC" & jday %in% c(215:240), NA, ER.upper))%>%
+  mutate(ER.lower = ifelse(site == "HC" & jday %in% c(215:240), NA, ER.lower))%>%
+  mutate(GPP.upper = ifelse(site == "HC" & jday %in% c(215:240), NA, GPP.upper))%>%
+  mutate(GPP.lower = ifelse(site == "HC" & jday %in% c(215:240), NA, GPP.lower))%>%
+  mutate(NEP = GPP + ER)
+  
+## this pltos shows depth based on single day estimate vs. daily by flow:
+met %>%
+  select(jday, site, z, depth.m)%>%
+  pivot_longer(3:4, names_to = "depth", values_to = "value")%>%
+ggplot(aes(x = jday, y = value, col = depth))+
+  geom_line()+
+  facet_wrap(~site)+
+  theme_classic()
+
+## And this shows how much better depth affected the GPP estimates:
+met %>%
+  select(jday, site.no, GPP, GPP.worse)%>%
+  pivot_longer(3:4, names_to = "GPP.type", values_to = "GPP")%>%
+ggplot(aes(x = jday, y = GPP, col = GPP.type))+
+  geom_line()+
+  facet_wrap(~site.no, nrow = 2)+
+  theme_classic()+
+  theme(legend.position = c(0.9, 0.2))
+
+m <- met %>% select(-z, -GPP.worse, -depth.ft, -site.Estimate.Intercept)%>%
+  rename(z = depth.m)
+
+
+#write_csv(m, "Data/Metab_for_hGAMs.csv")
+
+```
+
+
+### Metabolism:
+
+Plot of full metabolim data set:
+-The high ER at Happy Camp mid-season seems questionable. Could be due to biofouling. Need to revisit and discuss this with bob. [UPDATE: I eliminated high ER at HC; less obvious by likely biofouling; determined after revising the raw DO data. GPP looks reasonable though, and I opted to retain these data.]
+-OR data early season was super saturated so removed these estimates.
+
+```{r, warning=F, size = 'small', echo=FALSE, fig.width=14, fig.height=16}
+
+sites <- c("I5", "TH", "WB", "BB", "RP", "SV", "HC", "OMR", "OR", "WE", "KAT")
+met$site <- factor(met$site, levels = sites)
+
+meta.plot <- met%>% filter(!(site == "OR" & jday < 173))%>%
+ggplot( aes(x = jday, y = GPP))+
+  geom_abline(slope = 0, intercept = 0, width = 1, alpha = 0.6)+
+  geom_line(col = "cyan4", alpha = 0.8)+
+  geom_ribbon(aes(ymin = GPP.lower, ymax = GPP.upper), 
+              alpha = 0.4, fill = "cyan4")+
+  geom_line(aes(x = jday, y = ER),
+            col = "chocolate3", alpha = 0.8)+
+  geom_ribbon(aes(ymin = ER.lower, ymax = ER.upper), 
+              alpha = 0.4, fill = "chocolate3")+ 
+  geom_point(aes(x = jday, y = NEP),
+             alpha = 0.5, size = 0.4)+
+  facet_wrap(~site, ncol = 3)+
+  theme_classic()+
+  ylab(expression(paste("Metabolic flux ", "(g O"[2], " m"^{-2}, " d"^{-1},")" )))+
+  scale_y_continuous(limits = c(-27.5, 21))
+
+meta.plot
+
+
+```
+
+## Below are model diagnostics for metabolism:
+
+
+### K600 by Q
+`````{r, warning = F, echo = F,  fig.width = 6, fig.height = 6, fig.align = "center"}
+sites <- c("I5", "TH", "WB", "BB", "RP", "SV", "HC", "OMR", "OR", "WE", "KAT")
+met$site <- factor(met$site, levels = sites)
+
+ggplot(met, aes(y = K600.daily, x = Flow))+
+  geom_point(size = 0.6, alpha = 0.6)+
+  theme_classic()+
+  facet_wrap(~site, ncol = 3, scales = "free_x")
+`````
+
+### K600 by ER
+`````{r, warning = F, echo = F,  fig.width = 6, fig.height = 6, fig.align = "center"}
+
+ggplot(met, aes(x = K600.daily, y = ER))+
+  geom_point(size = 0.6, alpha = 0.6)+
+  theme_classic()+
+  facet_wrap(~site, nrow = 4, scales = "free")
+`````
+
+
+### K600 vs. GPP
+```{r, warning = F, echo = F,  fig.width = 6, fig.height = 6, fig.align = "center"}
+
+ggplot(met, aes(y = K600.daily, x = GPP))+
+  geom_point(size = 0.6, alpha = 0.6)+
+  theme_classic()+
+  facet_wrap(~site, nrow = 4, scales = "free")
+
+```
+
+
+## K600 diagnostics
+
+- fish out of data K600 _sigma (parameters)
+- fish out obs and proc error
+
+
+```{r, warning=F, size = 'small', fig.width=4, fig.height = 4}
+
+## ABC:
+load("Data/final_metab_rda/abc.rda")
+mf <- abc.rda
+
+mf.over <- mf$overall
+mf.over$err_obs_iid_sigma_mean 
+mf.over$err_proc_iid_sigma_mean 
+
+m <- met %>% filter(site == "WB")
+sd(m$K600.daily, na.rm = T)
+sd(log(m$K600.daily), na.rm = T)
+
+mf.day <- mf$daily
+mf.day %>% select(date, GPP_daily_Rhat, ER_daily_Rhat, K600_daily_Rhat)%>%
+  pivot_longer(2:4, values_to = "Rhat", names_to = "Param")%>%
+ggplot(aes(x = date, y =  Rhat))+
+  geom_hline(yintercept = 1.05, col = "red", lty = 2)+
+  geom_point()+
+  theme_classic()+
+  facet_wrap(~Param, ncol = 1)
+
+```
+
+
+
+## rhats for all sites
+
+```{r, warning=F, size = 'small', fig.width=4, fig.height = 4}
+
+
+rda_files <- list.files("Data/final_metab_rda", pattern = "\\.rda$", full.names = TRUE)
+
+df_list <- list()
+
+for (file in rda_files) {
+  load(file)
+  loaded_data_names <- ls()
+  df <- get(loaded_data_names[1])
+  df_list[[length(df_list) + 1]] <- df
+}
+
+
+a <- df_list[[1]]$daily%>% mutate(site = "3")
+b <-df_list[[2]]$daily%>% mutate(site = "4")
+c <-df_list[[3]]$daily%>% mutate(site = "7")
+d <-df_list[[4]]$daily%>% mutate(site = "1")
+e <-df_list[[5]]$daily%>% mutate(site = "11")
+f <-df_list[[6]]$daily%>% mutate(site = "8")
+g <-df_list[[7]]$daily%>% mutate(site = "9")
+h <-df_list[[8]]$daily%>% mutate(site = "5")
+i <-df_list[[9]]$daily%>% mutate(site = "6")
+j <-df_list[[10]]$daily%>% mutate(site = "2")
+k <-df_list[[11]]$daily%>% mutate(site = "10")
+
+rhats <- bind_rows(a, b, c, d, e, f, g, h, i , j, k)%>%
+ select(date, site, GPP_daily_Rhat, ER_daily_Rhat, K600_daily_Rhat)%>%
+ pivot_longer(3:5, values_to = "Rhat", names_to = "Parameter")%>%
+  mutate(site.no = as.numeric(site))%>%
+ggplot(aes(x = date, y =  Rhat))+
+  geom_hline(yintercept = 1.05, col = "red", lty = 2)+
+  geom_point(size = 0.6, alpha = 0.6)+
+  theme_classic()+
+  facet_grid(Parameter~site.no)+
+ theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+
+rhats
+
+```
+
+
+
+### Reach Lengths
+
+-   I tried using K600 for only august and for the whole season, they changed reach lengths very little so I'm just using the mean of all K600 here.
+-   Velocity is calculated from flow, width and depth that I measured for each site on the day if the surveys, thus this is what reach length applies to. It would change a little bit if mean velocity was slower during true baseflow but the change would be minimal.
+
+```{r, message = F, warning = F}
+met_sum <- met %>%
+  group_by(site)%>%
+  summarize(GPPm = mean(GPP, na.rm = T),
+            ERm = mean(ER, na.rm = T),
+            GPPsd = sd(GPP, na.rm = T),
+            ERsd = sd(ER, na.rm = T),
+            NEPm = mean((GPP+ER), na.rm = T),
+            NEPsd = sd((GPP+ER), na.rm = T),
+            K600m = mean(K600.daily, na.rm = T))
+
+## q here is 2019:
+
+
+k <- met_sum %>% select(site, K600m)
+
+## get flow on the day I collected the width and depth data
+QRL <- dwv %>% filter(transect == 1)%>%
+  select(date, site_code)%>%
+  mutate(site = ifelse(site_code == "ABC", "WB", site_code))%>%
+  left_join(q, by = c("site", "date"))%>%
+  mutate(cms = Flow*0.028)%>%
+  select(site, cms)
+
+
+tol <- rep(c(0.05, 0.25, 0.5, 0.80, 0.95), each = 11)
+s <- c("I5", "TH", "WB", "BB", "RP", "SV", "HC", "OMR", "OR", "WE", "KAT")
+site <- rep(s, length(tol)/11)
+tols <- data.frame(tol, site)
+
+reach <- dwv %>% select(date, site_code, river_mile, width)%>%
+  group_by(site_code)%>%
+  summarize(date = date[1], rm = mean(river_mile), w = mean(width))%>%
+  mutate(site_code = ifelse(site_code == "ABC", "WB", site_code))%>%
+  left_join(depths, by = c("date", "site_code"))%>%
+  filter(site_code != "SCRI")%>%
+  select(-Flow)%>%
+  mutate(site_km =  (190*1.6) - (rm*1.6))%>%
+  select(-rm)%>%
+  rename(site = "site_code")%>%
+  left_join(k, by = "site")%>%
+  left_join(QRL, by = "site")%>%
+  mutate(vel = cms/(mean_z*w))%>%
+  mutate(VperD = (vel/1000)*(24*60*60))%>%
+  left_join(tols, by = "site")%>%
+  mutate(multiplier = (log(1-tol)) * -1)%>%
+  rowwise()%>%
+  mutate(TOL_km = (multiplier*VperD)/K600m)
+
+
+reach$site <- factor(reach$site, levels = s)
+
+```
+
+
+### Reach Lengths
+
+A few ways to look at calculated reach lengths.  Reach lengths were calculated based on V during field suveys (around July 1st for all sites except KAT, which was surveyed Aug 1 but reach length is from week 27 still). Reach depth, width and velocity is based on field measurements. 
+
+```{r, warning = F, echo = F,  fig.width = 8, fig.height = 4, fig.align = "center"}
+
+p1 <- reach %>% filter(site != "KAT")%>%
+ggplot(aes(x = site, y = TOL_km,  group = as.factor(tol)))+
+  #geom_hline(yintercept = 5, lty = 2)+
+  #geom_hline(yintercept = 15, lty = 2)+
+  geom_hline(yintercept = 10, lty = 2, col = "red")+
+  geom_area(position = "identity", alpha= 0.4)+
+  theme_classic()+
+  geom_point(aes(col = as.factor(tol)), size = 0.8)+
+  labs(col = "%DO Turnover")+
+  ylab("Turnover Length (km)")+
+  theme(legend.position = c(0.15,0.81))
+
+p2 <- reach%>%
+ggplot(aes(x = TOL_km, y = tol, col = site))+
+  #geom_vline(xintercept = 5, lty = 2)+
+  #geom_vline(xintercept = 15, lty = 2)+
+  geom_point()+
+  geom_line()+
+  theme_classic()+
+  ylab("%DO Turnover")+
+  xlab("Turnover Length (km)")+
+  theme(legend.position = c(0.9, 0.42))
+
+plot_grid(p1, p2, align = "h", ncol = 2)
+
+plot_grid(p1, p2, align = "h", ncol = 2)
+
+```
+
+
+
+
+
+### Explore metabolism visuals
+
+
+```{r, warning = F, echo = F,  fig.width = 8, fig.height = 8, fig.align = "center"}
+
+met %>%
+  select(site.no, GPP, ER, NEP)%>%
+  pivot_longer(2:4, values_to = "metab", names_to = "param")%>%
+  ggplot(aes(x = as.factor(site.no), y = metab))+
+  geom_violin(width = 1.5, col = "grey75", fill = "grey85")+
+  geom_boxplot(width = 0.2)+
+  theme_classic()+
+  facet_wrap(~param, ncol = 1, scales = "free")
+
+met %>%
+  select(date, site.no, GPP, ER, NEP)%>%
+  pivot_longer(3:5, values_to = "metab", names_to = "param")%>%
+  ggplot(aes(x = date, y = metab, col = as.factor(site.no)))+
+  geom_line(lwd = 1.1, alpha = 0.8, begin = 0, end = 0.8)+
+  scale_colour_viridis_d(begin = 0, end = 0.8, direction  = 1)+
+  theme_classic()+
+  facet_wrap(~param, ncol = 1, scales = "free")
+
+```
+
+
+### Calc. River Geomorph/Flow Stats for Site Table in Methods
+
+-   Slope is from WSE 
+-   W is mean of my 6 transects
+-   mean z is for Aug?
+-   mean baseflow is for Aug
+-   Peak flow is annual peak daily flow
+-   Reach length: use 80%??
+
+
+
+```{r, warning = F, echo = F,  fig.width = 6.5, fig.height = 5, fig.align = "center"}
+
+## data is currently in ft/miles:
+sites
+slope.df <- test.6 %>%
+  filter(ex.prob == 75)%>%
+  mutate(WSE.m = WSE.el * 0.3047)%>%
+  mutate(Station.m = Station*1609.34)%>%
+  select(WSE.m, Station.m, site)
+
+
+## top to bottome method:  
+slope.df %>% 
+    group_by(site)%>%
+    mutate(stat.no = row_number(Station.m))%>%
+    mutate(position = ifelse(stat.no < 5, "low",
+                       ifelse(stat.no > max(stat.no - 5), "high", NA)))%>%
+    group_by(position, site)%>%
+    summarize(ELV = mean(WSE.m, na.rm = T))%>%
+    filter(!is.na(position))%>%
+    pivot_wider(names_from = position, values_from = ELV)%>%
+    mutate(slope = ((high-low)/10000)*100)
+
+
+## lm method:
+library(ggpubr)
+
+slope.df %>%
+ggplot(aes(x = Station.m, y = WSE.m, col = as.factor(site)))+
+  geom_point(alpha = 0.2, size = 0.5)+
+  stat_smooth(method = "lm")+
+  #facet_wrap(~site, scales = "free")+
+  stat_regline_equation()
+
+
+## reach length
+rl <- reach %>% filter(tol == 0.8)%>%
+  select(site, w, site_km, TOL_km)%>%
+  mutate(r.km = (1.6*190)-site_km)
+
+rl %>% select(site, TOL_km)
+
+## Q
+q.stats <- all.flows%>%
+  filter(year %in% c(2018:2019))%>%
+  mutate(mon = month(date))%>%
+  filter(site_code != "none")
+
+aug.q <- q.stats %>% filter(year == 2019 & mon == 8)%>%
+  group_by(site_code)%>%
+  summarize(m.aug = mean(Flow*0.0283))
+
+peak.winter <- q.stats %>%
+  group_by(site_code)%>%
+  filter(date > "2018-10-01" & date < "2019-10-01")%>%
+  summarize(peak.q = max(Flow, na.rm = T)*0.0283)
+  
+## mean aug depth
+met %>% mutate(mon = month(date))%>%
+  filter(mon == 8)%>%
+  group_by(site)%>%
+  summarize(aug.z = mean(depth.m, na.rm = T))
+  
+met %>% mutate(mon = month(date))%>%
+  filter(mon == 8)%>%
+  group_by(site)%>%
+  summarize(aug.K = mean(K600.daily, na.rm = T))
+
+met %>% mutate(mon = month(date))%>%
+  group_by(site)%>%
+  summarize(mean.sum.K = mean(K600.daily, na.rm = T))
+
+
+```
+
+
+
+## SI plot of macro bm by max flow:
+
+```{r, warning = F, echo = F,  fig.width = 5, fig.height = 5, fig.align = "center"}
+f <- flows %>% rename(site = site_code)%>%
+  rename(maxq = "Flow")
+
+q19 <- flows %>% filter(year == 2019)%>%
+  group_by(site_code)%>%
+  summarise(maxq = max(Flow))%>%
+  rename(site = site_code)%>%
+  left_join(bm, by = "site")%>%
+  mutate(maxQ = maxq/35.3146)%>%
+  filter(!is.na(site.no))
+
+
+#pdf("2023_PUB/Figures/SI_figures/MacroBMxFlow.pdf",  width = 4, height = 4)
+ggplot(q19, aes(x = maxQ, y = macrophyte+1, col = as.factor(site.no)))+
+  geom_point(size = 5, alpha = 0.8)+
+    theme_classic()+
+   theme(legend.position = c(.8, 0.76))+
+  scale_x_log10()+
+    scale_y_log10()+
+   ylab(expression(paste("Macrophyte biomass (g AFDM/", m^2, ")")))+
+  xlab(expression(Discharge~(m^3/s)))+
+  scale_colour_viridis_d(begin = 0, end = 0.8, direction  = 1, alpha = 0.85, name = "Site", guide=guide_legend(ncol= 2, override.aes = list(size = 2.5)))
+  
+#dev.off()
+
+```

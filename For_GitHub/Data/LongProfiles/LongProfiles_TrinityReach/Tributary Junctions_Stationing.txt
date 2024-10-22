@@ -1,0 +1,2 @@
+Name, Station, Elevationn
+Trinity River, 43.2502613863, -1.0
